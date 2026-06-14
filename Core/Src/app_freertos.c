@@ -148,12 +148,29 @@ void sensorImplausibilityMonitoring(void *argument)
 {
   /* USER CODE BEGIN sensorImplausibilityMonitoring */
   /* Infinite loop */
+
+  uint64_t potential_sensor_issue_time = 0;
+  uint64_t currenttick = osKernelGetTickCount();
+
   for(;;)
   {
     osDelay(1);
     osDelay(1);
 
-    uint8_t apps_issue = 1;
+    uint8_t apps_issue = apps1 < APPS1_LB || apps1 > APPS1_UB || apps2 < APPS2_LB || apps2 > APPS2_UB;
+    uint8_t tps_issue = tps1 < TPS1_LB || tps1 > TPS1_UB || tps2 < TPS2_LB || tps2 > TPS2_UB;
+    uint8_t bse_issue = bse1 < BS1_LB || bse1 > BS1_UB || bse2 < BS2_LB || bse2 > BS2_UB;
+
+    if (apps_issue || tps_issue || bse_issue) {
+      potential_sensor_issue_time += 1;    
+    } else {
+      potential_sensor_issue_time = 0;
+    }
+
+    sensor_implausibility = (potential_sensor_issue_time > 100);
+
+    osDelayUntil(++currenttick);
+
   }
   /* USER CODE END sensorImplausibilityMonitoring */
 }
