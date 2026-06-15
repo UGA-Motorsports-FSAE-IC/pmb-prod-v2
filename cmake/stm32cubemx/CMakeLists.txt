@@ -3,7 +3,6 @@ cmake_minimum_required(VERSION 3.22)
 enable_language(C ASM)
 # STM32CubeMX generated symbols (macros)
 set(MX_Defines_Syms 
-	USE_NUCLEO_64 
 	USE_HAL_DRIVER 
 	STM32C092xx
     $<$<CONFIG:Debug>:DEBUG>
@@ -14,7 +13,6 @@ set(MX_Include_Dirs
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32C0xx_HAL_Driver/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32C0xx_HAL_Driver/Inc/Legacy
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/BSP/STM32C0xx_Nucleo
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/CMSIS/Device/ST/STM32C0xx/Include
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/CMSIS/Include
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Middlewares/Third_Party/FreeRTOS/Source/include/
@@ -52,11 +50,9 @@ set(STM32_Drivers_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr_ex.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_exti.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_fdcan.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_uart.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_uart_ex.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart_ex.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/BSP/STM32C0xx_Nucleo/stm32c0xx_nucleo.c
 )
 
 # Drivers Midllewares

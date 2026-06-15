@@ -29,9 +29,6 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 #include "stm32c0xx_hal.h"
 
-#include "stm32c0xx_nucleo.h"
-#include <stdio.h>
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -62,10 +59,6 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define OSCX_IN_Pin GPIO_PIN_14
-#define OSCX_IN_GPIO_Port GPIOC
-#define OSCX_OUT_Pin GPIO_PIN_15
-#define OSCX_OUT_GPIO_Port GPIOC
 #define OSC_IN_Pin GPIO_PIN_0
 #define OSC_IN_GPIO_Port GPIOF
 #define OSC_OUT_Pin GPIO_PIN_1

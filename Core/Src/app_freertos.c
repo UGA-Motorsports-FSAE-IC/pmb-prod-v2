@@ -24,6 +24,8 @@
 /* USER CODE BEGIN Includes */
 
 #include "cmsis_os2.h"
+#include "stm32c0xx.h"
+#include "stm32c0xx_hal_fdcan.h"
 #include "tuning_constants.h"
 #include <stdint.h>
 
@@ -47,6 +49,8 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 
+
+
 uint32_t apps1;
 uint32_t apps2;
 uint32_t tps1;
@@ -64,7 +68,7 @@ uint8_t sensor_implausibility = 0;
 uint8_t throttle_and_brakes_on = 0;
 uint8_t throttle_not_at_intended = 0;
 
-
+uint32_t tps_target;
 
 /* USER CODE END Variables */
 /* Definitions for sensorImplausibilityMonitoring */
