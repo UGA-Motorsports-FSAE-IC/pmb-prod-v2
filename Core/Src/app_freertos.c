@@ -160,6 +160,7 @@ void sensorImplausibilityMonitoring(void *argument)
   /* Infinite loop */
 
   osDelay(100);
+  
 
   uint32_t potential_sensor_issue_time = 0;
   uint32_t currenttick = osKernelGetTickCount();
@@ -276,6 +277,7 @@ void paddleshift(void *argument)
       HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
     } else {
       osDelay(1);
+
     }
 
   }
