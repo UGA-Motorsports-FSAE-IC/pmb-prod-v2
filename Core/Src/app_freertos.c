@@ -49,8 +49,6 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 
-
-
 uint32_t apps1;
 uint32_t apps2;
 uint32_t tps1;
