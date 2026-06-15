@@ -28,7 +28,6 @@
 #include "stm32c0xx.h"
 #include "stm32c0xx_hal_fdcan.h"
 #include "tuning_constants.h"
-#include <cstddef>
 #include <stdint.h>
 
 /* USER CODE END Includes */
@@ -57,6 +56,11 @@ uint32_t tps1;
 uint32_t tps2;
 uint32_t bse1;
 uint32_t bse2;
+
+uint8_t shiftnumber = 1;
+uint8_t shiftdir = 0;
+uint8_t currentshiftnum = 1;
+
 
 uint64_t apps1_updation;
 uint64_t apps2_updation;
@@ -210,29 +214,33 @@ void readsensordata(void *argument)
     uint8_t * candata = currentmessage.canrxdata;
     uint32_t id = currentmessage.rxheader.Identifier;
     
-    if (id = APPS1_CAN_ID) {
+    if (id == APPS1_CAN_ID) {
       apps1 = candata[APPS1_CAN_OFFSET];
       apps1_updation = currenttick;
     }
-    if (id = APPS2_CAN_ID) {
+    if (id == APPS2_CAN_ID) {
       apps2 = candata[APPS2_CAN_OFFSET];
       apps2_updation = currenttick;      
     }
-    if (id = TPS1_CAN_ID) {
+    if (id == TPS1_CAN_ID) {
       tps1 = candata[TPS1_CAN_OFFSET];
       tps1_updation = currenttick;
     }
-    if (id = TPS2_CAN_ID) {
+    if (id == TPS2_CAN_ID) {
       tps2 = candata[TPS2_CAN_OFFSET];
       tps2_updation = currenttick;
     }
-    if (id = BS1_CAN_ID) {
+    if (id == BS1_CAN_ID) {
       bse1 = candata[BS1_CAN_OFFSET];
       bs1_updation = currenttick;
     }
-    if (id = BS2_CAN_ID) {
+    if (id == BS2_CAN_ID) {
       bse2 = candata[BS2_CAN_OFFSET];
       bs2_updation = currenttick;
+    }
+    if (id == SHIFT_ID) {
+      shiftnumber = candata[SHIFT_COUNT_OFFSET];
+      shiftdir = candata[SHIFT_DIR_OFFSET];
     }
   }
   /* USER CODE END readsensors */
@@ -251,7 +259,25 @@ void paddleshift(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    if (currentshiftnum != shiftnumber) {
+      currentshiftnum = shiftnumber;
+      if (shiftdir == 1) {
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET); //downshift relay
+      } else if (shiftdir == 2) {
+        //do shift cut over can????
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET); //upshift relay
+      }
+      osDelay(100);
+
+      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
+    } else {
+      osDelay(1);
+    }
+
   }
   /* USER CODE END paddleshift */
 }
