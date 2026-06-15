@@ -1,7 +1,7 @@
 
 
-#ifndef __TUNING_CONSTNATS_H
-#define __TUNING_CONSTNATS_H
+#ifndef __TUNING_CONSTANTS_H
+#define __TUNING_CONSTANTS_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,8 +43,22 @@ extern "C" {
 #define PID_FORWARD_D   10
 #define PID_BACKWARD_D  10
 
+// the following are constants for can frames
+
+#define APPS1_CAN_ID        10
+#define APPS1_CAN_OFFSET    10
+#define APPS2_CAN_ID        10
+#define APPS2_CAN_OFFSET    10
+#define TPS1_CAN_ID         10
+#define TPS1_CAN_OFFSET     10
+#define TPS2_CAN_ID         10
+#define TPS2_CAN_OFFSET     10
+#define BS1_CAN_ID          10
+#define BS1_CAN_OFFSET      10
+#define BS2_CAN_ID          10
+#define BS2_CAN_OFFSET      10
 
 #ifdef __cplusplus
 }
 #endif
-#endif /* __TUNING_CONSTNATS_H */
+#endif /* __TUNING_CONSTANTS_H */

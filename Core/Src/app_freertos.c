@@ -24,9 +24,11 @@
 /* USER CODE BEGIN Includes */
 
 #include "cmsis_os2.h"
+#include "fdcanmessage.h"
 #include "stm32c0xx.h"
 #include "stm32c0xx_hal_fdcan.h"
 #include "tuning_constants.h"
+#include <cstddef>
 #include <stdint.h>
 
 /* USER CODE END Includes */
@@ -65,6 +67,8 @@ uint64_t bs2_updation;
 uint8_t sensor_implausibility = 0;
 uint8_t throttle_and_brakes_on = 0;
 uint8_t throttle_not_at_intended = 0;
+
+extern osMessageQueueId_t canqueue;
 
 uint32_t tps_target;
 
@@ -156,9 +160,6 @@ void sensorImplausibilityMonitoring(void *argument)
 
   for(;;)
   {
-    osDelay(1);
-    osDelay(1);
-
     uint8_t apps_issue = apps1 < APPS1_LB || apps1 > APPS1_UB || apps2 < APPS2_LB || apps2 > APPS2_UB;
     uint8_t tps_issue = tps1 < TPS1_LB || tps1 > TPS1_UB || tps2 < TPS2_LB || tps2 > TPS2_UB;
     uint8_t bse_issue = bse1 < BS1_LB || bse1 > BS1_UB || bse2 < BS2_LB || bse2 > BS2_UB;
@@ -188,9 +189,20 @@ void readsensordata(void *argument)
 {
   /* USER CODE BEGIN readsensors */
   /* Infinite loop */
+  uint64_t currenttick = osKernelGetTickCount();
+  apps1_updation = currenttick;
+  apps2_updation = currenttick;
+  tps1_updation = currenttick;
+  tps2_updation = currenttick;
+  bs1_updation = currenttick;
+  bs2_updation = currenttick;
+
+  rxmessage currentmessage;
+
   for(;;)
   {
-    osDelay(1);
+    osMessageQueueGet(canqueue, &currentmessage, NULL, osWaitForever);
+    
   }
   /* USER CODE END readsensors */
 }
