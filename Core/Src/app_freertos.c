@@ -61,6 +61,7 @@ uint32_t bse2;
 uint8_t shiftnumber = 1;
 uint8_t shiftdir = 0;
 uint8_t currentshiftnum = 1;
+uint32_t mostrecentshift;
 
 
 uint64_t apps1_updation;
@@ -264,10 +265,14 @@ void paddleshift(void *argument)
 {
   /* USER CODE BEGIN paddleshift */
   /* Infinite loop */
+
+  mostrecentshift = 0;
+
   for(;;)
   {
-    if (currentshiftnum != shiftnumber) {
+    if (currentshiftnum != shiftnumber && (osKernelGetTickCount() - mostrecentshift > 100)) {
       currentshiftnum = shiftnumber;
+      mostrecentshift = osKernelGetTickCount();
       if (shiftdir == 1) {
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET); //downshift relay
