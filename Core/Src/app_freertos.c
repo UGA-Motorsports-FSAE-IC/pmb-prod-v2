@@ -155,14 +155,16 @@ void sensorImplausibilityMonitoring(void *argument)
   /* USER CODE BEGIN sensorImplausibilityMonitoring */
   /* Infinite loop */
 
-  uint64_t potential_sensor_issue_time = 0;
-  uint64_t currenttick = osKernelGetTickCount();
+  osDelay(100);
 
+  uint32_t potential_sensor_issue_time = 0;
+  uint32_t currenttick = osKernelGetTickCount();
   for(;;)
   {
-    uint8_t apps_issue = apps1 < APPS1_LB || apps1 > APPS1_UB || apps2 < APPS2_LB || apps2 > APPS2_UB;
-    uint8_t tps_issue = tps1 < TPS1_LB || tps1 > TPS1_UB || tps2 < TPS2_LB || tps2 > TPS2_UB;
-    uint8_t bse_issue = bse1 < BS1_LB || bse1 > BS1_UB || bse2 < BS2_LB || bse2 > BS2_UB;
+
+    uint8_t apps_issue = apps1 < APPS1_LB || apps1 > APPS1_UB || apps2 < APPS2_LB || apps2 > APPS2_UB || (currenttick - apps1_updation > 100) || (currenttick - apps2_updation > 100);
+    uint8_t tps_issue = tps1 < TPS1_LB || tps1 > TPS1_UB || tps2 < TPS2_LB || tps2 > TPS2_UB || (currenttick - tps1_updation > 100) || (currenttick - tps2_updation > 100);
+    uint8_t bse_issue = bse1 < BS1_LB || bse1 > BS1_UB || bse2 < BS2_LB || bse2 > BS2_UB || (currenttick - bs1_updation > 100) || (currenttick - bs2_updation > 100); 
 
     if (apps_issue || tps_issue || bse_issue) {
       potential_sensor_issue_time += 1;    
@@ -202,7 +204,36 @@ void readsensordata(void *argument)
   for(;;)
   {
     osMessageQueueGet(canqueue, &currentmessage, NULL, osWaitForever);
+
+    currenttick = osKernelGetTickCount();
+
+    uint8_t * candata = currentmessage.canrxdata;
+    uint32_t id = currentmessage.rxheader.Identifier;
     
+    if (id = APPS1_CAN_ID) {
+      apps1 = candata[APPS1_CAN_OFFSET];
+      apps1_updation = currenttick;
+    }
+    if (id = APPS2_CAN_ID) {
+      apps2 = candata[APPS2_CAN_OFFSET];
+      apps2_updation = currenttick;      
+    }
+    if (id = TPS1_CAN_ID) {
+      tps1 = candata[TPS1_CAN_OFFSET];
+      tps1_updation = currenttick;
+    }
+    if (id = TPS2_CAN_ID) {
+      tps2 = candata[TPS2_CAN_OFFSET];
+      tps2_updation = currenttick;
+    }
+    if (id = BS1_CAN_ID) {
+      bse1 = candata[BS1_CAN_OFFSET];
+      bs1_updation = currenttick;
+    }
+    if (id = BS2_CAN_ID) {
+      bse2 = candata[BS2_CAN_OFFSET];
+      bs2_updation = currenttick;
+    }
   }
   /* USER CODE END readsensors */
 }

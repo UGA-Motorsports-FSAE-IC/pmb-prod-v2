@@ -1,4 +1,5 @@
 
+//values can be changed as needed
 
 #ifndef __TUNING_CONSTANTS_H
 #define __TUNING_CONSTANTS_H
@@ -6,8 +7,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-//values can be changed as needed
 
 #define APPS1_UB    10
 #define APPS1_LB    10
@@ -57,6 +56,13 @@ extern "C" {
 #define BS1_CAN_OFFSET      10
 #define BS2_CAN_ID          10
 #define BS2_CAN_OFFSET      10
+
+#define RPM_CAN_ID          10
+#define RPM_CAN_OFFSET      10
+
+#define SHIFT_ID            10
+#define SHIFT_DIR_OFFSET    10
+#define SHFIT_COUNT_OFFSET  10
 
 #ifdef __cplusplus
 }
