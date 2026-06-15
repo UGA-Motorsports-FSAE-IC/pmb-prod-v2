@@ -55,6 +55,8 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
+FDCAN_FilterTypeDef canfilter;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -118,6 +120,19 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   canqueue = osMessageQueueNew(50, sizeof(rxmessage), NULL);
+
+  canfilter.IdType = FDCAN_STANDARD_ID;
+  canfilter.FilterIndex = 0;
+  canfilter.FilterType = FDCAN_FILTER_MASK;
+  canfilter.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+  canfilter.FilterID1 = 0x000;
+  canfilter.FilterID2 = 0x000;  
+    
+  HAL_FDCAN_ConfigFilter(&hfdcan1, &canfilter);
+
+  HAL_FDCAN_Start(&hfdcan1);
+
+  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
 
   /* USER CODE END 2 */
 

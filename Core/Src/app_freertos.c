@@ -27,6 +27,7 @@
 #include "fdcanmessage.h"
 #include "stm32c0xx.h"
 #include "stm32c0xx_hal_fdcan.h"
+#include "stm32c0xx_hal_gpio.h"
 #include "tuning_constants.h"
 #include <stdint.h>
 
@@ -160,7 +161,12 @@ void sensorImplausibilityMonitoring(void *argument)
   /* Infinite loop */
 
   osDelay(100);
-  
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
+  osDelay(100);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET); //led
+  osDelay(100);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led  
+
 
   uint32_t potential_sensor_issue_time = 0;
   uint32_t currenttick = osKernelGetTickCount();
