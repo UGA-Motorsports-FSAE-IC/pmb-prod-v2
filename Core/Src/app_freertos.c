@@ -82,6 +82,7 @@ uint8_t throttle_not_at_intended = 0;
 uint8_t useapps = 0;
 
 extern osMessageQueueId_t canqueue;
+
 extern UART_HandleTypeDef huart1; 
 
 uint32_t tps_target;
@@ -105,7 +106,7 @@ const osThreadAttr_t readsensors_attributes = {
 osThreadId_t paddleshiftHandle;
 const osThreadAttr_t paddleshift_attributes = {
   .name = "paddleshift",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityHigh,
   .stack_size = 128 * 4
 };
 /* Definitions for throttlePID */
@@ -127,7 +128,7 @@ osThreadId_t serialMonitoringHandle;
 const osThreadAttr_t serialMonitoring_attributes = {
   .name = "serialMonitoring",
   .priority = (osPriority_t) osPriorityNormal,
-  .stack_size = 128 * 4
+  .stack_size = 512 * 4
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -310,7 +311,7 @@ void paddleshift(void *argument)
   {
     if (currentshiftnum != shiftnumber) {
       currentshiftnum = shiftnumber;
-      if ((osKernelGetTickCount() - mostrecentshift) > (SHIFT_SOLENOID_HOLD_TIME + 10)) {
+      if ((osKernelGetTickCount() - mostrecentshift) > (SHIFT_SOLENOID_HOLD_TIME + 20)) {
         mostrecentshift = osKernelGetTickCount();
         if (shiftdir == 1) {
           HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
@@ -420,6 +421,8 @@ void throttlePositionControl(void *argument)
       targetvalue = (APPS_TO_TPS_TARGET_SLOPE * apps2 / 1000) + APPS_TO_TPS_TARGET_INTERCEPT;
     }
 
+
+
     currenttick += THROTTLE_UPDATION_DELTA;
     osDelayUntil(currenttick);
   }
@@ -437,15 +440,14 @@ void serialMonitoring(void *argument)
 {
   /* USER CODE BEGIN serialMonitoring */
   /* Infinite loop */
+
+  char buffer[300];
+
   for(;;)
-  {
-
-    char buffer[300];
-
-    sprintf(buffer, "apps1: %lu\t| apps2: %lu\t| tps1: %lu\t| tps2: %lu\t| bs1: %lu\t| bs2: %lu\r\n", apps1, apps2, tps1, tps2, bse1, bse2);
+  { 
+    sprintf(buffer, "apps1: %lu | apps2: %lu | tps1: %lu | tps2: %lu | bs1: %lu | bs2: %lu\r\n", apps1, apps2, tps1, tps2, bse1, bse2);
 
     HAL_UART_Transmit(&huart1, (const uint8_t *)buffer, strlen(buffer), osWaitForever);
-
 
     osDelay(100);
   }
