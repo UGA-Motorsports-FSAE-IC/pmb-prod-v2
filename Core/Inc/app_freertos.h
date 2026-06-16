@@ -57,6 +57,9 @@ extern "C" {
 extern osThreadId_t sensorImplausibilityMonitoringHandle;
 extern osThreadId_t readsensorsHandle;
 extern osThreadId_t paddleshiftHandle;
+extern osThreadId_t throttlePIDHandle;
+extern osThreadId_t throttlePositionControlHandle;
+extern osThreadId_t serialMonitoringHandle;
 
 /* Exported function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -66,6 +69,9 @@ extern osThreadId_t paddleshiftHandle;
 void sensorImplausibilityMonitoring(void *argument);
 void readsensordata(void *argument);
 void paddleshift(void *argument);
+void throttlePID(void *argument);
+void throttlePositionControl(void *argument);
+void serialMonitoring(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 

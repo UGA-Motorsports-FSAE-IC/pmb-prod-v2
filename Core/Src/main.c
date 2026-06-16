@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "fdcanmessage.h"
 #include "stm32c0xx_hal_fdcan.h"
+#include "stm32c0xx_hal_tim.h"
 
 /* USER CODE END Includes */
 
@@ -49,13 +50,13 @@ osMessageQueueId_t canqueue;
 
 FDCAN_HandleTypeDef hfdcan1;
 
-TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim16;
 
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
-FDCAN_FilterTypeDef canfilter;
+FDCAN_FilterTypeDef canfilter;  
 
 /* USER CODE END PV */
 
@@ -63,9 +64,9 @@ FDCAN_FilterTypeDef canfilter;
 void SystemClock_Config(void);
 void MX_FREERTOS_Init(void);
 static void MX_GPIO_Init(void);
-static void MX_TIM2_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_FDCAN1_Init(void);
+static void MX_TIM16_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -114,9 +115,9 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_TIM2_Init();
   MX_USART1_UART_Init();
   MX_FDCAN1_Init();
+  MX_TIM16_Init();
   /* USER CODE BEGIN 2 */
 
   canqueue = osMessageQueueNew(50, sizeof(rxmessage), NULL);
@@ -133,6 +134,9 @@ int main(void)
   HAL_FDCAN_Start(&hfdcan1);
 
   HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+
+  HAL_TIM_PWM_Start(&htim16, TIM_CHANNEL_1);
+  TIM16->CCR1 = 0;
 
   /* USER CODE END 2 */
 
@@ -238,61 +242,65 @@ static void MX_FDCAN1_Init(void)
 }
 
 /**
-  * @brief TIM2 Initialization Function
+  * @brief TIM16 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_TIM2_Init(void)
+static void MX_TIM16_Init(void)
 {
 
-  /* USER CODE BEGIN TIM2_Init 0 */
+  /* USER CODE BEGIN TIM16_Init 0 */
 
-  /* USER CODE END TIM2_Init 0 */
+  /* USER CODE END TIM16_Init 0 */
 
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
+  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
-  /* USER CODE BEGIN TIM2_Init 1 */
+  /* USER CODE BEGIN TIM16_Init 1 */
 
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  /* USER CODE END TIM16_Init 1 */
+  htim16.Instance = TIM16;
+  htim16.Init.Prescaler = 9;
+  htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim16.Init.Period = 99;
+  htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim16.Init.RepetitionCounter = 0;
+  htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim16) != HAL_OK)
   {
     Error_Handler();
   }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  if (HAL_TIM_PWM_Init(&htim16) != HAL_OK)
   {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim16, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM2_Init 2 */
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+  sBreakDeadTimeConfig.DeadTime = 0;
+  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+  sBreakDeadTimeConfig.BreakFilter = 0;
+  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+  if (HAL_TIMEx_ConfigBreakDeadTime(&htim16, &sBreakDeadTimeConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM16_Init 2 */
 
-  /* USER CODE END TIM2_Init 2 */
-  HAL_TIM_MspPostInit(&htim2);
+  /* USER CODE END TIM16_Init 2 */
+  HAL_TIM_MspPostInit(&htim16);
 
 }
 

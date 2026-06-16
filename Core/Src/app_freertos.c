@@ -25,11 +25,15 @@
 
 #include "cmsis_os2.h"
 #include "fdcanmessage.h"
+#include "stm32c092xx.h"
 #include "stm32c0xx.h"
 #include "stm32c0xx_hal_fdcan.h"
 #include "stm32c0xx_hal_gpio.h"
+#include "stm32c0xx_hal_uart.h"
 #include "tuning_constants.h"
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 /* USER CODE END Includes */
 
@@ -63,6 +67,8 @@ uint8_t shiftdir = 0;
 uint8_t currentshiftnum = 1;
 uint32_t mostrecentshift;
 
+uint32_t targetvalue = 300;
+
 
 uint64_t apps1_updation;
 uint64_t apps2_updation;
@@ -73,8 +79,10 @@ uint64_t bs2_updation;
 uint8_t sensor_implausibility = 0;
 uint8_t throttle_and_brakes_on = 0;
 uint8_t throttle_not_at_intended = 0;
+uint8_t useapps = 0;
 
 extern osMessageQueueId_t canqueue;
+extern UART_HandleTypeDef huart1; 
 
 uint32_t tps_target;
 
@@ -97,6 +105,27 @@ const osThreadAttr_t readsensors_attributes = {
 osThreadId_t paddleshiftHandle;
 const osThreadAttr_t paddleshift_attributes = {
   .name = "paddleshift",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 128 * 4
+};
+/* Definitions for throttlePID */
+osThreadId_t throttlePIDHandle;
+const osThreadAttr_t throttlePID_attributes = {
+  .name = "throttlePID",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 128 * 4
+};
+/* Definitions for throttlePositionControl */
+osThreadId_t throttlePositionControlHandle;
+const osThreadAttr_t throttlePositionControl_attributes = {
+  .name = "throttlePositionControl",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 128 * 4
+};
+/* Definitions for serialMonitoring */
+osThreadId_t serialMonitoringHandle;
+const osThreadAttr_t serialMonitoring_attributes = {
+  .name = "serialMonitoring",
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 128 * 4
 };
@@ -139,6 +168,15 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of paddleshift */
   paddleshiftHandle = osThreadNew(paddleshift, NULL, &paddleshift_attributes);
+
+  /* creation of throttlePID */
+  throttlePIDHandle = osThreadNew(throttlePID, NULL, &throttlePID_attributes);
+
+  /* creation of throttlePositionControl */
+  throttlePositionControlHandle = osThreadNew(throttlePositionControl, NULL, &throttlePositionControl_attributes);
+
+  /* creation of serialMonitoring */
+  serialMonitoringHandle = osThreadNew(serialMonitoring, NULL, &serialMonitoring_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -270,29 +308,148 @@ void paddleshift(void *argument)
 
   for(;;)
   {
-    if (currentshiftnum != shiftnumber && (osKernelGetTickCount() - mostrecentshift > 100)) {
+    if (currentshiftnum != shiftnumber) {
       currentshiftnum = shiftnumber;
-      mostrecentshift = osKernelGetTickCount();
-      if (shiftdir == 1) {
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET); //downshift relay
-      } else if (shiftdir == 2) {
-        //do shift cut over can????
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET); //upshift relay
+      if ((osKernelGetTickCount() - mostrecentshift) > (SHIFT_SOLENOID_HOLD_TIME + 10)) {
+        mostrecentshift = osKernelGetTickCount();
+        if (shiftdir == 1) {
+          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET); //downshift relay
+        } else if (shiftdir == 2) {
+          //do shift cut over can????
+          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET); //upshift relay
+        }
+        osDelay(SHIFT_SOLENOID_HOLD_TIME);
+
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
       }
-      osDelay(100);
-
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
-    } else {
-      osDelay(1);
-
     }
+    
+    osDelay(1);
+
 
   }
   /* USER CODE END paddleshift */
+}
+
+/* USER CODE BEGIN Header_throttlePID */
+/**
+* @brief Function implementing the throttlePID thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_throttlePID */
+void throttlePID(void *argument)
+{
+  /* USER CODE BEGIN throttlePID */
+  /* Infinite loop */
+
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET); //throttle relay
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET); //polulu direction forward
+
+  uint32_t currenttick = osKernelGetTickCount();
+
+  int integral = 0;
+  int previouserror = 0;
+
+  for(;;)
+  {
+
+    int proportion = 0;
+    int derivative = 0;
+    int error = targetvalue - (int)tps1;
+
+    int change_in_integral;
+    if (error > 0) {
+      proportion = error * PID_FORWARD_P;
+      change_in_integral = PID_DT * error * PID_FORWARD_I;
+      derivative = (error - previouserror) * PID_FORWARD_D;
+    } else {
+      proportion = error * PID_BACKWARD_P;
+      change_in_integral = PID_DT * error * PID_BACKWARD_I;
+      derivative = (error - previouserror) * PID_BACKWARD_D;
+    }
+
+    previouserror = error;
+    
+    int finalresult = ((proportion + change_in_integral + derivative) / 1000) + integral;
+
+    /*
+    if (finalresult > 0) {
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET); //polulu direction forward
+      TIM16->CCR1 = finalresult;
+    } else {
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_SET); //polulu direction reverse
+      TIM16->CCR1 = (-1 * finalresult);
+    }
+    */
+
+    TIM16->CCR1 = 30;
+    
+
+    currenttick += PID_DT;
+    osDelayUntil(currenttick);
+  }
+  /* USER CODE END throttlePID */
+}
+
+/* USER CODE BEGIN Header_throttlePositionControl */
+/**
+* @brief Function implementing the throttlePositionControl thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_throttlePositionControl */
+void throttlePositionControl(void *argument)
+{
+  /* USER CODE BEGIN throttlePositionControl */
+  /* Infinite loop */
+
+  osDelay(100);
+
+  uint32_t currenttick = osKernelGetTickCount();
+
+  for(;;)
+  {
+    if (throttle_and_brakes_on || throttle_not_at_intended) {
+      targetvalue = THROTTLE_IDLE_TARGET;
+    } else if (useapps) {
+      targetvalue = (APPS_TO_TPS_TARGET_SLOPE * apps2 / 1000) + APPS_TO_TPS_TARGET_INTERCEPT;
+    }
+
+    currenttick += THROTTLE_UPDATION_DELTA;
+    osDelayUntil(currenttick);
+  }
+  /* USER CODE END throttlePositionControl */
+}
+
+/* USER CODE BEGIN Header_serialMonitoring */
+/**
+* @brief Function implementing the serialMonitoring thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_serialMonitoring */
+void serialMonitoring(void *argument)
+{
+  /* USER CODE BEGIN serialMonitoring */
+  /* Infinite loop */
+  for(;;)
+  {
+
+    char buffer[300];
+
+    sprintf(buffer, "apps1: %lu\t| apps2: %lu\t| tps1: %lu\t| tps2: %lu\t| bs1: %lu\t| bs2: %lu\r\n", apps1, apps2, tps1, tps2, bse1, bse2);
+
+    HAL_UART_Transmit(&huart1, (const uint8_t *)buffer, strlen(buffer), osWaitForever);
+
+
+    osDelay(100);
+  }
+  /* USER CODE END serialMonitoring */
 }
 
 /* Private application code --------------------------------------------------*/

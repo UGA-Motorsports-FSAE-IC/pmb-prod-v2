@@ -35,12 +35,13 @@ extern "C" {
 #define APPS_TO_TPS_TARGET_SLOPE        10
 #define APPS_TO_TPS_TARGET_INTERCEPT    10
 
-#define PID_FORWARD_P   10
-#define PID_BACKWARD_P  10
-#define PID_FORWARD_I   10
-#define PID_BACKWARD_I  10
-#define PID_FORWARD_D   10
-#define PID_BACKWARD_D  10
+#define PID_FORWARD_P   0
+#define PID_BACKWARD_P  0
+#define PID_FORWARD_I   0
+#define PID_BACKWARD_I  0
+#define PID_FORWARD_D   0
+#define PID_BACKWARD_D  0
+#define PID_DT          1
 
 // the following are constants for can frames
 
@@ -63,6 +64,14 @@ extern "C" {
 #define SHIFT_ID            172
 #define SHIFT_DIR_OFFSET    0
 #define SHIFT_COUNT_OFFSET  1
+
+#define SHIFT_SOLENOID_HOLD_TIME    100
+
+#define THROTTLE_UPDATION_DELTA     2
+
+#define THROTTLE_IDLE_TARGET    700
+
+
 
 #ifdef __cplusplus
 }
