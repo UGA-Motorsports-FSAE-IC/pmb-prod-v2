@@ -29,11 +29,14 @@
 #include "stm32c0xx.h"
 #include "stm32c0xx_hal_fdcan.h"
 #include "stm32c0xx_hal_gpio.h"
+#include "stm32c0xx_hal_tim.h"
 #include "stm32c0xx_hal_uart.h"
-#include "tuning_constants.h"
+#include "constants.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "tim.h"
+#include "usart.h"
 
 /* USER CODE END Includes */
 
@@ -55,19 +58,19 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 
-uint32_t apps1;
-uint32_t apps2;
-uint32_t tps1;
-uint32_t tps2;
-uint32_t bse1;
-uint32_t bse2;
+volatile uint32_t apps1;
+volatile uint32_t apps2;
+volatile uint32_t tps1;
+volatile uint32_t tps2;
+volatile uint32_t bse1;
+volatile uint32_t bse2;
 
 uint8_t shiftnumber = 1;
 uint8_t shiftdir = 0;
 uint8_t currentshiftnum = 1;
 uint32_t mostrecentshift;
 
-uint32_t targetvalue = 300;
+volatile uint32_t targetvalue = 300;
 
 
 uint64_t apps1_updation;
@@ -79,11 +82,9 @@ uint64_t bs2_updation;
 uint8_t sensor_implausibility = 0;
 uint8_t throttle_and_brakes_on = 0;
 uint8_t throttle_not_at_intended = 0;
-uint8_t useapps = 0;
+uint8_t useapps = 1;
 
 extern osMessageQueueId_t canqueue;
-
-extern UART_HandleTypeDef huart1; 
 
 uint32_t tps_target;
 
@@ -259,30 +260,31 @@ void readsensordata(void *argument)
     currenttick = osKernelGetTickCount();
 
     uint8_t * candata = currentmessage.canrxdata;
+    uint16_t * candata_2_byte = (uint16_t *)(currentmessage.canrxdata);
     uint32_t id = currentmessage.rxheader.Identifier;
     
     if (id == APPS1_CAN_ID) {
-      apps1 = candata[APPS1_CAN_OFFSET];
+      apps1 = candata_2_byte[APPS1_CAN_OFFSET];
       apps1_updation = currenttick;
     }
     if (id == APPS2_CAN_ID) {
-      apps2 = candata[APPS2_CAN_OFFSET];
+      apps2 = candata_2_byte[APPS2_CAN_OFFSET];
       apps2_updation = currenttick;      
     }
     if (id == TPS1_CAN_ID) {
-      tps1 = candata[TPS1_CAN_OFFSET];
+      tps1 = candata_2_byte[TPS1_CAN_OFFSET];
       tps1_updation = currenttick;
     }
     if (id == TPS2_CAN_ID) {
-      tps2 = candata[TPS2_CAN_OFFSET];
+      tps2 = candata_2_byte[TPS2_CAN_OFFSET];
       tps2_updation = currenttick;
     }
     if (id == BS1_CAN_ID) {
-      bse1 = candata[BS1_CAN_OFFSET];
+      bse1 = candata_2_byte[BS1_CAN_OFFSET];
       bs1_updation = currenttick;
     }
     if (id == BS2_CAN_ID) {
-      bse2 = candata[BS2_CAN_OFFSET];
+      bse2 = candata_2_byte[BS2_CAN_OFFSET];
       bs2_updation = currenttick;
     }
     if (id == SHIFT_ID) {
@@ -377,18 +379,22 @@ void throttlePID(void *argument)
     previouserror = error;
     
     int finalresult = ((proportion + change_in_integral + derivative) / 1000) + integral;
-
-    /*
+    integral += ((change_in_integral / 1000) + integral);
+    
     if (finalresult > 0) {
       HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET); //polulu direction forward
-      TIM16->CCR1 = finalresult;
     } else {
       HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_SET); //polulu direction reverse
-      TIM16->CCR1 = (-1 * finalresult);
+      finalresult *= -1;
     }
-    */
 
-    TIM16->CCR1 = 30;
+    if (finalresult > MAX_THROTTLE_MOTOR_PWM) {
+      finalresult = MAX_THROTTLE_MOTOR_PWM;
+    }
+
+    __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, finalresult);
+
+    //TIM16->CCR1 = 30; //have this commented out
     
 
     currenttick += PID_DT;
@@ -418,9 +424,8 @@ void throttlePositionControl(void *argument)
     if (throttle_and_brakes_on || throttle_not_at_intended) {
       targetvalue = THROTTLE_IDLE_TARGET;
     } else if (useapps) {
-      targetvalue = (APPS_TO_TPS_TARGET_SLOPE * apps2 / 1000) + APPS_TO_TPS_TARGET_INTERCEPT;
+      targetvalue = ((APPS_TO_TPS_TARGET_SLOPE * ((int)apps1)) + APPS_TO_TPS_TARGET_INTERCEPT) / 1000;
     }
-
 
 
     currenttick += THROTTLE_UPDATION_DELTA;
@@ -441,11 +446,11 @@ void serialMonitoring(void *argument)
   /* USER CODE BEGIN serialMonitoring */
   /* Infinite loop */
 
-  char buffer[300];
+  char buffer[200];
 
   for(;;)
   { 
-    sprintf(buffer, "apps1: %lu | apps2: %lu | tps1: %lu | tps2: %lu | bs1: %lu | bs2: %lu\r\n", apps1, apps2, tps1, tps2, bse1, bse2);
+    sprintf(buffer, "apps1: %lu\t| apps2: %lu\t| tps1: %lu\t| tps2: %lu\t| bs1: %lu\t| bs2: %lu\t| target: %lu\r\n", apps1, apps2, tps1, tps2, bse1, bse2, targetvalue);
 
     HAL_UART_Transmit(&huart1, (const uint8_t *)buffer, strlen(buffer), osWaitForever);
 
