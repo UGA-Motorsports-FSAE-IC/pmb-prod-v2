@@ -35,6 +35,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/_intsup.h>
 #include "tim.h"
 #include "usart.h"
 
@@ -65,28 +66,32 @@ volatile uint32_t tps2;
 volatile uint32_t bse1;
 volatile uint32_t bse2;
 
-uint8_t shiftnumber = 1;
-uint8_t shiftdir = 0;
-uint8_t currentshiftnum = 1;
-uint32_t mostrecentshift;
+volatile uint8_t shiftnumber = 1;
+volatile uint8_t shiftdir = 0;
+volatile uint8_t currentshiftnum = 1;
+volatile uint32_t mostrecentshift;
 
-volatile uint32_t targetvalue = 300;
+volatile int actual_throttle_position;  //number from 0 to 1000 representing 0% to 100% actuation
+volatile int target_throttle_position;
 
+volatile int gas_pedal_position;  //number from 0 to 1000 representing 0% to 100%
 
-uint64_t apps1_updation;
-uint64_t apps2_updation;
-uint64_t tps1_updation;
-uint64_t tps2_updation;
-uint64_t bs1_updation;
-uint64_t bs2_updation;
-uint8_t sensor_implausibility = 0;
-uint8_t throttle_and_brakes_on = 0;
-uint8_t throttle_not_at_intended = 0;
-uint8_t useapps = 1;
+volatile uint32_t apps1_updation;
+volatile uint32_t apps2_updation;
+volatile uint32_t tps1_updation;
+volatile uint32_t  tps2_updation;
+volatile uint32_t  bs1_updation;
+volatile uint32_t  bs2_updation;
+volatile uint8_t sensor_implausibility = 0;
+volatile uint8_t throttle_and_brakes_on = 0;
+volatile uint8_t throttle_not_at_intended = 0;
+
+volatile uint8_t useapps = 1;
+
+volatile uint8_t shiftblipactive = 0;
+volatile uint32_t shiftbliptarget;
 
 extern osMessageQueueId_t canqueue;
-
-uint32_t tps_target;
 
 /* USER CODE END Variables */
 /* Definitions for sensorImplausibilityMonitoring */
@@ -210,21 +215,30 @@ void sensorImplausibilityMonitoring(void *argument)
 
 
   uint32_t potential_sensor_issue_time = 0;
+  uint32_t sensor_normal_function_time = 0;
   uint32_t currenttick = osKernelGetTickCount();
   for(;;)
   {
 
-    uint8_t apps_issue = apps1 < APPS1_LB || apps1 > APPS1_UB || apps2 < APPS2_LB || apps2 > APPS2_UB || (currenttick - apps1_updation > 100) || (currenttick - apps2_updation > 100);
-    uint8_t tps_issue = tps1 < TPS1_LB || tps1 > TPS1_UB || tps2 < TPS2_LB || tps2 > TPS2_UB || (currenttick - tps1_updation > 100) || (currenttick - tps2_updation > 100);
-    uint8_t bse_issue = bse1 < BS1_LB || bse1 > BS1_UB || bse2 < BS2_LB || bse2 > BS2_UB || (currenttick - bs1_updation > 100) || (currenttick - bs2_updation > 100); 
+    uint8_t apps_issue = apps1 < APPS1_LB || apps1 > APPS1_UB || apps2 < APPS2_LB || apps2 > APPS2_UB || (currenttick - apps1_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || (currenttick - apps2_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT);
+    uint8_t tps_issue = tps1 < TPS1_LB || tps1 > TPS1_UB || tps2 < TPS2_LB || tps2 > TPS2_UB || (currenttick - tps1_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || (currenttick - tps2_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT);
+    uint8_t bse_issue = bse1 < BS1_LB || bse1 > BS1_UB || bse2 < BS2_LB || bse2 > BS2_UB || (currenttick - bs1_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || (currenttick - bs2_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT); 
 
     if (apps_issue || tps_issue || bse_issue) {
+      sensor_normal_function_time = 0;
       potential_sensor_issue_time += 1;    
     } else {
       potential_sensor_issue_time = 0;
+      sensor_normal_function_time += 1;
     }
 
-    sensor_implausibility = (potential_sensor_issue_time > 100);
+    if (potential_sensor_issue_time > SENSOR_IMPLAUSIBILITY_TIMEOUT) {
+      sensor_implausibility = 1;
+    }
+
+    if (sensor_normal_function_time > SENSOR_BACK_TO_NORMAL_TIMEOUT) {
+      sensor_implausibility = 0;
+    }
 
     osDelayUntil(++currenttick);
 
@@ -291,6 +305,12 @@ void readsensordata(void *argument)
       shiftnumber = candata[SHIFT_COUNT_OFFSET];
       shiftdir = candata[SHIFT_DIR_OFFSET];
     }
+
+
+    //here, percentages are represented as a number from 0 to 1000.
+    actual_throttle_position = (((int)tps1 * RAW_TPS1_TO_THROTLE_PERCENTAGE_SLOPE) + RAW_TPS1_TO_THROTTLE_PERCENTAGE_INTERCEPT) / 1000;
+    gas_pedal_position = (((int)apps1 * RAW_APPS1_TO_PEDAL_PERCENTAGE_SLOPE) + RAW_APPS1_TO_PEDAL_PERCENTAGE_INTERCEPT) / 1000;
+
   }
   /* USER CODE END readsensors */
 }
@@ -325,9 +345,9 @@ void paddleshift(void *argument)
         }
         osDelay(SHIFT_SOLENOID_HOLD_TIME);
 
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET); //led
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); //downshift relay
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); //upshift relay
       }
     }
     
@@ -363,9 +383,10 @@ void throttlePID(void *argument)
 
     int proportion = 0;
     int derivative = 0;
-    int error = targetvalue - (int)tps1;
-
     int change_in_integral;
+
+    int error = ((int)target_throttle_position - (int)actual_throttle_position);
+
     if (error > 0) {
       proportion = error * PID_FORWARD_P;
       change_in_integral = PID_DT * error * PID_FORWARD_I;
@@ -394,9 +415,6 @@ void throttlePID(void *argument)
 
     __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, finalresult);
 
-    //TIM16->CCR1 = 30; //have this commented out
-    
-
     currenttick += PID_DT;
     osDelayUntil(currenttick);
   }
@@ -416,17 +434,19 @@ void throttlePositionControl(void *argument)
   /* Infinite loop */
 
   osDelay(100);
-
   uint32_t currenttick = osKernelGetTickCount();
+
+
 
   for(;;)
   {
-    if (throttle_and_brakes_on || throttle_not_at_intended) {
-      targetvalue = THROTTLE_IDLE_TARGET;
+    if (throttle_and_brakes_on || throttle_not_at_intended || sensor_implausibility) {
+      target_throttle_position = THROTTLE_IDLE_TARGET;
+    } else if (shiftblipactive) {
+      target_throttle_position = shiftbliptarget;
     } else if (useapps) {
-      targetvalue = ((APPS_TO_TPS_TARGET_SLOPE * ((int)apps1)) + APPS_TO_TPS_TARGET_INTERCEPT) / 1000;
-    }
-
+      target_throttle_position = gas_pedal_position;
+    } 
 
     currenttick += THROTTLE_UPDATION_DELTA;
     osDelayUntil(currenttick);
@@ -450,7 +470,7 @@ void serialMonitoring(void *argument)
 
   for(;;)
   { 
-    sprintf(buffer, "apps1: %lu\t| apps2: %lu\t| tps1: %lu\t| tps2: %lu\t| bs1: %lu\t| bs2: %lu\t| target: %lu\r\n", apps1, apps2, tps1, tps2, bse1, bse2, targetvalue);
+    sprintf(buffer, "apps1: %lu\t| apps2: %lu\t| tps1: %lu\t| tps2: %lu\t| bs1: %lu\t| bs2: %lu\t| target: %d\r\n", apps1, apps2, tps1, tps2, bse1, bse2, target_throttle_position);
 
     HAL_UART_Transmit(&huart1, (const uint8_t *)buffer, strlen(buffer), osWaitForever);
 
