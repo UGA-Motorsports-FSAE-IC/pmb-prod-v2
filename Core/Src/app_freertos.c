@@ -34,6 +34,7 @@
 #include "constants.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/_intsup.h>
 #include "tim.h"
@@ -72,19 +73,24 @@ volatile uint8_t currentshiftnum = 1;
 volatile uint32_t mostrecentshift;
 
 volatile int actual_throttle_position;  //number from 0 to 1000 representing 0% to 100% actuation
+volatile int actual_throttle_position_2nd_sensor; //same thing but calculated from other tps
 volatile int target_throttle_position;
 
 volatile int gas_pedal_position;  //number from 0 to 1000 representing 0% to 100%
+volatile int gas_pedal_position_2nd_sensor; //same thing but calculated from other apps
+
+volatile int brake_depression_percentage;
+volatile int brake_depression_percentage_2nd_sensor;
 
 volatile uint32_t apps1_updation;
 volatile uint32_t apps2_updation;
 volatile uint32_t tps1_updation;
-volatile uint32_t  tps2_updation;
-volatile uint32_t  bs1_updation;
-volatile uint32_t  bs2_updation;
-volatile uint8_t sensor_implausibility = 0;
-volatile uint8_t throttle_and_brakes_on = 0;
-volatile uint8_t throttle_not_at_intended = 0;
+volatile uint32_t tps2_updation;
+volatile uint32_t bs1_updation;
+volatile uint32_t bs2_updation;
+volatile uint32_t implausibility_throttle_closure = 0;
+
+
 
 volatile uint8_t useapps = 1;
 
@@ -213,35 +219,89 @@ void sensorImplausibilityMonitoring(void *argument)
   osDelay(100);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led  
 
+  uint8_t sensor_data_implausibility = 0;
+  uint8_t sensor_can_reception_implausibility = 0;
+  uint8_t throttle_and_brakes_on_implausibility = 0;
+  uint8_t throttle_not_at_intended_implausibility = 0;
 
-  uint32_t potential_sensor_issue_time = 0;
-  uint32_t sensor_normal_function_time = 0;
+  uint32_t potential_sensor_issue_duration = 0;
+  uint32_t sensor_normal_function_duration = 0;
+
+  uint32_t potential_throttlebody_issue_duration = 0;
+  uint32_t throttlebody_normal_function_duration = 0;
+
+  uint32_t potential_stuck_throttle_duration = 0;
+  uint32_t no_longer_stuck_throttle_duration = 0;
+
   uint32_t currenttick = osKernelGetTickCount();
   for(;;)
   {
 
-    uint8_t apps_issue = apps1 < APPS1_LB || apps1 > APPS1_UB || apps2 < APPS2_LB || apps2 > APPS2_UB || (currenttick - apps1_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || (currenttick - apps2_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT);
-    uint8_t tps_issue = tps1 < TPS1_LB || tps1 > TPS1_UB || tps2 < TPS2_LB || tps2 > TPS2_UB || (currenttick - tps1_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || (currenttick - tps2_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT);
-    uint8_t bse_issue = bse1 < BS1_LB || bse1 > BS1_UB || bse2 < BS2_LB || bse2 > BS2_UB || (currenttick - bs1_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || (currenttick - bs2_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT); 
+    //the following code checks if there is any issue with the received sensor values
 
+    uint8_t apps_issue = apps1 < APPS1_LB || apps1 > APPS1_UB || apps2 < APPS2_LB || apps2 > APPS2_UB || (abs(gas_pedal_position - gas_pedal_position_2nd_sensor) < MAX_GAS_PEDAL_SENSORS_DEVIATION);
+    uint8_t tps_issue = tps1 < TPS1_LB || tps1 > TPS1_UB || tps2 < TPS2_LB || tps2 > TPS2_UB || (abs(actual_throttle_position - actual_throttle_position_2nd_sensor) < MAX_THROTTLE_SENSORS_DEVIATION);
+    uint8_t bse_issue = bse1 < BS1_LB || bse1 > BS1_UB || bse2 < BS2_LB || bse2 > BS2_UB; 
     if (apps_issue || tps_issue || bse_issue) {
-      sensor_normal_function_time = 0;
-      potential_sensor_issue_time += 1;    
+      sensor_normal_function_duration = 0;
+      potential_sensor_issue_duration += IMPLAUSIBILITY_CHECK_INTERVAL;    
     } else {
-      potential_sensor_issue_time = 0;
-      sensor_normal_function_time += 1;
+      potential_sensor_issue_duration = 0;
+      sensor_normal_function_duration += IMPLAUSIBILITY_CHECK_INTERVAL;
+    }
+    if (potential_sensor_issue_duration > SENSOR_IMPLAUSIBILITY_TIMEOUT) {
+      sensor_data_implausibility = 1;
+    }
+    if (sensor_normal_function_duration > SENSOR_BACK_TO_NORMAL_TIMEOUT) {
+      sensor_data_implausibility = 0;
     }
 
-    if (potential_sensor_issue_time > SENSOR_IMPLAUSIBILITY_TIMEOUT) {
-      sensor_implausibility = 1;
+    //the following code checks if there is issues with the data retrieval of sensors over CAN 
+
+    sensor_can_reception_implausibility = (currenttick - apps1_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || (currenttick - apps2_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || 
+                (currenttick - tps1_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || (currenttick - tps2_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || 
+                (currenttick - bs1_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT) || (currenttick - bs2_updation > SENSOR_IMPLAUSIBILITY_TIMEOUT);
+
+
+    //the following code checks for if the throttle body flap is not actuating to the intended position
+    
+    if (abs(actual_throttle_position - target_throttle_position) > MAX_THROTTLE_INTENDED_VS_ACTUAL_DEVIATION) {
+      potential_throttlebody_issue_duration += IMPLAUSIBILITY_CHECK_INTERVAL;
+      throttlebody_normal_function_duration = 0;
+    } else {
+      throttlebody_normal_function_duration += IMPLAUSIBILITY_CHECK_INTERVAL;
+      potential_throttlebody_issue_duration = 0;
+    }
+    if (potential_throttlebody_issue_duration > THROTTLEBODY_FAILURE_TIMEOUT) {
+      throttle_not_at_intended_implausibility = 1;
+      potential_throttlebody_issue_duration += IMPLAUSIBILITY_CHECK_INTERVAL;
+      no_longer_stuck_throttle_duration = 0;
+      //remove power to the throttle body
+    }
+    if (throttlebody_normal_function_duration > THROTTLEBODY_BACK_TO_NORMAL_TIMEOUT) {
+      throttle_not_at_intended_implausibility = 0;
+      no_longer_stuck_throttle_duration += IMPLAUSIBILITY_CHECK_INTERVAL;
+      potential_throttlebody_issue_duration = 0;
+      //give back power to the throttle body
     }
 
-    if (sensor_normal_function_time > SENSOR_BACK_TO_NORMAL_TIMEOUT) {
-      sensor_implausibility = 0;
+    if (potential_stuck_throttle_duration > OPEN_SHUTDOWN_CIRCUIT_TIMEOUT) {
+      //open the shutdown circuit, removing power from injector spark fuel
+    }
+    if (no_longer_stuck_throttle_duration > CLOSE_SHUTDOWN_CIRCUIT_TIMEOUT) {
+      //close the shutdown circuit, giving power back to injector spark fuel
     }
 
-    osDelayUntil(++currenttick);
+    //the following code checks if there is hard braking and open throttle at the same time
 
+    throttle_and_brakes_on_implausibility = actual_throttle_position > OPEN_THROTTLE_PERCENTAGE_THRESHOLD && brake_depression_percentage > HARD_BRAKING_PERCENTAGE_THRESHOLD;
+
+    //this boolean will be true if there is any reason from above to bring the throttle flap to idle position. 
+    // The throttlePositionControl thread monitors this boolean and acts accordingly.
+    implausibility_throttle_closure = sensor_can_reception_implausibility || sensor_data_implausibility || throttle_not_at_intended_implausibility || throttle_and_brakes_on_implausibility;
+
+    currenttick += IMPLAUSIBILITY_CHECK_INTERVAL;
+    osDelayUntil(currenttick);
   }
   /* USER CODE END sensorImplausibilityMonitoring */
 }
@@ -307,10 +367,15 @@ void readsensordata(void *argument)
     }
 
 
-    //here, percentages are represented as a number from 0 to 1000.
-    actual_throttle_position = (((int)tps1 * RAW_TPS1_TO_THROTLE_PERCENTAGE_SLOPE) + RAW_TPS1_TO_THROTTLE_PERCENTAGE_INTERCEPT) / 1000;
-    gas_pedal_position = (((int)apps1 * RAW_APPS1_TO_PEDAL_PERCENTAGE_SLOPE) + RAW_APPS1_TO_PEDAL_PERCENTAGE_INTERCEPT) / 1000;
+    //here, "percentages" are represented as a number from 0 to 1000.
+    actual_throttle_position = LINEAR(tps1, RAW_TPS1_TO_THROTLE_PERCENTAGE_SLOPE, RAW_TPS1_TO_THROTTLE_PERCENTAGE_INTERCEPT);
+    gas_pedal_position = LINEAR(apps1, RAW_APPS1_TO_PEDAL_PERCENTAGE_SLOPE, RAW_APPS1_TO_PEDAL_PERCENTAGE_INTERCEPT);
 
+    actual_throttle_position_2nd_sensor = LINEAR(tps2, RAW_TPS2_TO_THROTTLE_PERCENTAGE_SLOPE, RAW_TPS2_TO_THROTTLE_PERCENTAGE_INTERCEPT);
+    gas_pedal_position_2nd_sensor = LINEAR(apps2, RAW_APPS2_TO_PEDAL_PERCENTAGE_SLOPE, RAW_APPS2_TO_PEDAL_PERCENTAGE_INTERCEPT);
+
+    brake_depression_percentage = LINEAR(bse1, RAW_BS1_TO_BRAKE_PERCENTAGE_SLOPE, RAW_BS1_TO_BRAKE_PERCENTAGE_INTERCEPT);
+    brake_depression_percentage_2nd_sensor = LINEAR(bse2, RAW_BS2_TO_BRAKE_PERCENTAGE_SLOPE, RAW_BS2_TO_BRAKE_PERCENTAGE_INTERCEPT);
   }
   /* USER CODE END readsensors */
 }
@@ -331,6 +396,8 @@ void paddleshift(void *argument)
 
   for(;;)
   {
+    osDelay(1);
+
     if (currentshiftnum != shiftnumber) {
       currentshiftnum = shiftnumber;
       if ((osKernelGetTickCount() - mostrecentshift) > (SHIFT_SOLENOID_HOLD_TIME + 20)) {
@@ -350,10 +417,6 @@ void paddleshift(void *argument)
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); //upshift relay
       }
     }
-    
-    osDelay(1);
-
-
   }
   /* USER CODE END paddleshift */
 }
@@ -440,7 +503,7 @@ void throttlePositionControl(void *argument)
 
   for(;;)
   {
-    if (throttle_and_brakes_on || throttle_not_at_intended || sensor_implausibility) {
+    if (implausibility_throttle_closure) {
       target_throttle_position = THROTTLE_IDLE_TARGET;
     } else if (shiftblipactive) {
       target_throttle_position = shiftbliptarget;
