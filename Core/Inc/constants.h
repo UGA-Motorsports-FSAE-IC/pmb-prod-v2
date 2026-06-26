@@ -105,7 +105,8 @@ extern "C" {
 
 //the following determines throttle idle position, it is a number from 0 to 1000, representing 0% to 100% actuation
 
-#define THROTTLE_IDLE_TARGET    40
+#define THROTTLE_IDLE_TARGET        40
+#define THROTTLE_CLOSURE_TARGET     0
 
 //the following is the raw rpm value for engine idle
 

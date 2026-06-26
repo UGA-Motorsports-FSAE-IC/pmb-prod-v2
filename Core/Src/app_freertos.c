@@ -88,12 +88,10 @@ volatile uint32_t tps1_updation;
 volatile uint32_t tps2_updation;
 volatile uint32_t bs1_updation;
 volatile uint32_t bs2_updation;
-volatile uint32_t implausibility_throttle_closure = 0;
-
-uint8_t sensor_data_implausibility = 0;
-uint8_t sensor_can_reception_implausibility = 0;
-uint8_t throttle_and_brakes_on_implausibility = 0;
-uint8_t throttle_not_at_intended_implausibility = 0;
+volatile uint8_t sensor_data_implausibility = 0;
+volatile uint8_t sensor_can_reception_implausibility = 0;
+volatile uint8_t throttle_and_brakes_on_implausibility = 0;
+volatile uint8_t throttle_not_at_intended_implausibility = 0;
 
 volatile uint8_t useapps = 1;
 
@@ -226,12 +224,8 @@ void sensorImplausibilityMonitoring(void *argument)
 
   uint32_t potential_sensor_issue_duration = 0;
   uint32_t sensor_normal_function_duration = 0;
-
   uint32_t potential_throttlebody_issue_duration = 0;
   uint32_t throttlebody_normal_function_duration = 0;
-
-  uint32_t potential_stuck_throttle_duration = 0;
-  uint32_t no_longer_stuck_throttle_duration = 0;
 
   uint32_t currenttick = osKernelGetTickCount();
   for(;;)
@@ -274,34 +268,26 @@ void sensorImplausibilityMonitoring(void *argument)
     }
     if (potential_throttlebody_issue_duration > THROTTLEBODY_FAILURE_TIMEOUT) {
       throttle_not_at_intended_implausibility = 1;
-      potential_throttlebody_issue_duration += IMPLAUSIBILITY_CHECK_INTERVAL;
-      no_longer_stuck_throttle_duration = 0;
     }
     if (throttlebody_normal_function_duration > THROTTLEBODY_BACK_TO_NORMAL_TIMEOUT) {
       throttle_not_at_intended_implausibility = 0;
-      no_longer_stuck_throttle_duration += IMPLAUSIBILITY_CHECK_INTERVAL;
-      potential_throttlebody_issue_duration = 0;
-    }
-
-    if (potential_stuck_throttle_duration > OPEN_SHUTDOWN_CIRCUIT_TIMEOUT) {
-      //open the shutdown circuit, removing power from injector spark fuel
-    }
-    if (no_longer_stuck_throttle_duration > CLOSE_SHUTDOWN_CIRCUIT_TIMEOUT) {
-      //close the shutdown circuit, giving power back to injector spark fuel
     }
 
     //the following code checks if there is hard braking and open throttle at the same time
 
     throttle_and_brakes_on_implausibility = actual_throttle_position > OPEN_THROTTLE_PERCENTAGE_THRESHOLD && brake_depression_percentage > HARD_BRAKING_PERCENTAGE_THRESHOLD;
 
-    //this boolean will be true if there is any reason from above to bring the throttle flap to idle position. 
-    // The throttlePositionControl thread monitors this boolean and acts accordingly.
-    implausibility_throttle_closure = sensor_can_reception_implausibility || sensor_data_implausibility || throttle_not_at_intended_implausibility || throttle_and_brakes_on_implausibility;
-
-    if (implausibility_throttle_closure) {
+    //the following will shut down the throttle body power if there is any issue with the sensors
+    if (sensor_can_reception_implausibility || sensor_data_implausibility) {
       HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET); //throttle relay
     } else {
       HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET); //throttle relay
+    }
+
+    if (throttle_not_at_intended_implausibility) {
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET); //shutdown relay
+    } else {
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET); //shutdown relay
     }
 
     currenttick += IMPLAUSIBILITY_CHECK_INTERVAL;
@@ -464,7 +450,6 @@ void throttlePID(void *argument)
       proportion = error * PID_FORWARD_P;
       change_in_integral = PID_DT * error * PID_FORWARD_I;
       derivative = (error - previouserror) * PID_FORWARD_D / PID_DT;
-
     } else {
       proportion = error * PID_BACKWARD_P;
       change_in_integral = PID_DT * error * PID_BACKWARD_I;
@@ -508,19 +493,59 @@ void throttlePositionControl(void *argument)
   uint32_t currenttick = osKernelGetTickCount();
 
 
+  
+  int integral = 0;
+  int previouserror = 0;
 
   for(;;)
   {
-    /*
-    if (implausibility_throttle_closure) {
+    if (sensor_can_reception_implausibility || sensor_data_implausibility || throttle_not_at_intended_implausibility) {
+      target_throttle_position = 0;
+    } else if (throttle_and_brakes_on_implausibility) {
       target_throttle_position = THROTTLE_IDLE_TARGET;
-    } else */ if (shiftblipactive) {
+    } else if (shiftblipactive) {
       target_throttle_position = shiftbliptarget;
     } else if (useapps) {
       target_throttle_position = gas_pedal_position;
     }
 
-    currenttick += THROTTLE_UPDATION_DELTA;
+    
+    int proportion = 0;
+    int derivative = 0;
+    int change_in_integral = 0;
+
+    int error = target_throttle_position - actual_throttle_position;
+
+    if (error > 0) {
+      proportion = error * PID_FORWARD_P;
+      change_in_integral = PID_DT * error * PID_FORWARD_I;
+      derivative = (error - previouserror) * PID_FORWARD_D / PID_DT;
+    } else {
+      proportion = error * PID_BACKWARD_P;
+      change_in_integral = PID_DT * error * PID_BACKWARD_I;
+      derivative = (error - previouserror) * PID_BACKWARD_D / PID_DT;
+    }
+
+    previouserror = error;
+    
+    integral = (change_in_integral / 1000) + integral;
+    int finalresult = ((proportion + derivative) / 1000) + integral;
+    
+    if (finalresult > 0) {
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET); //polulu direction forward
+    } else {
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_SET); //polulu direction reverse
+      finalresult *= -1;
+    }
+
+    if (finalresult > MAX_THROTTLE_MOTOR_PWM) {
+      finalresult = MAX_THROTTLE_MOTOR_PWM;
+    }
+  
+    __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, finalresult);
+
+
+    currenttick += PID_DT;
     osDelayUntil(currenttick);
   }
   /* USER CODE END throttlePositionControl */
