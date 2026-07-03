@@ -50,7 +50,7 @@ extern "C" {
 
 #define MAX_THROTTLE_INTENDED_VS_ACTUAL_DEVIATION   200
 
-#define HARD_BRAKING_PERCENTAGE_THRESHOLD           500
+#define HARD_BRAKING_PERCENTAGE_THRESHOLD           160
 #define OPEN_THROTTLE_PERCENTAGE_THRESHOLD          400
 
 
@@ -82,6 +82,9 @@ extern "C" {
 #define RPM_CAN_ID          283428934 //?? dont know this one need to get it
 #define RPM_CAN_OFFSET      0
 
+#define BSPD_CAN_ID         214
+#define BSPD_CAN_OFFSET     2
+
 #define SHIFT_ID            172
 #define SHIFT_DIR_OFFSET    0
 #define SHIFT_COUNT_OFFSET  1
@@ -105,7 +108,7 @@ extern "C" {
 
 //the following determines throttle idle position, it is a number from 0 to 1000, representing 0% to 100% actuation
 
-#define THROTTLE_IDLE_TARGET        40
+#define THROTTLE_IDLE_TARGET        100
 #define THROTTLE_CLOSURE_TARGET     0
 
 //the following is the raw rpm value for engine idle

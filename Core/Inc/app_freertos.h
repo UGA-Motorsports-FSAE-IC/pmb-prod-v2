@@ -57,7 +57,6 @@ extern "C" {
 extern osThreadId_t sensorImplausibilityMonitoringHandle;
 extern osThreadId_t readsensorsHandle;
 extern osThreadId_t paddleshiftHandle;
-extern osThreadId_t throttlePIDHandle;
 extern osThreadId_t throttlePositionControlHandle;
 extern osThreadId_t serialMonitoringHandle;
 
@@ -69,7 +68,6 @@ extern osThreadId_t serialMonitoringHandle;
 void sensorImplausibilityMonitoring(void *argument);
 void readsensordata(void *argument);
 void paddleshift(void *argument);
-void throttlePID(void *argument);
 void throttlePositionControl(void *argument);
 void serialMonitoring(void *argument);
 

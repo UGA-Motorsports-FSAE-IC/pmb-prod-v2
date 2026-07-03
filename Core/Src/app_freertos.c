@@ -67,6 +67,8 @@ volatile uint32_t tps2;
 volatile uint32_t bse1;
 volatile uint32_t bse2;
 
+volatile uint32_t bspd;
+
 volatile uint8_t shiftnumber = 1;
 volatile uint8_t shiftdir = 0;
 volatile uint8_t currentshiftnum = 1;
@@ -92,6 +94,8 @@ volatile uint8_t sensor_data_implausibility = 0;
 volatile uint8_t sensor_can_reception_implausibility = 0;
 volatile uint8_t throttle_and_brakes_on_implausibility = 0;
 volatile uint8_t throttle_not_at_intended_implausibility = 0;
+volatile uint8_t shutdownrelay = 0;
+volatile uint8_t throttlerelay = 0;
 
 volatile uint8_t useapps = 1;
 
@@ -120,13 +124,6 @@ osThreadId_t paddleshiftHandle;
 const osThreadAttr_t paddleshift_attributes = {
   .name = "paddleshift",
   .priority = (osPriority_t) osPriorityHigh,
-  .stack_size = 128 * 4
-};
-/* Definitions for throttlePID */
-osThreadId_t throttlePIDHandle;
-const osThreadAttr_t throttlePID_attributes = {
-  .name = "throttlePID",
-  .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 128 * 4
 };
 /* Definitions for throttlePositionControl */
@@ -183,9 +180,6 @@ void MX_FREERTOS_Init(void) {
   /* creation of paddleshift */
   paddleshiftHandle = osThreadNew(paddleshift, NULL, &paddleshift_attributes);
 
-  /* creation of throttlePID */
-  throttlePIDHandle = osThreadNew(throttlePID, NULL, &throttlePID_attributes);
-
   /* creation of throttlePositionControl */
   throttlePositionControlHandle = osThreadNew(throttlePositionControl, NULL, &throttlePositionControl_attributes);
 
@@ -226,6 +220,8 @@ void sensorImplausibilityMonitoring(void *argument)
   uint32_t sensor_normal_function_duration = 0;
   uint32_t potential_throttlebody_issue_duration = 0;
   uint32_t throttlebody_normal_function_duration = 0;
+  uint32_t potential_throttle_stuck_duration = 0;
+  uint32_t throttlebody_not_stuck_duration = 0;
 
   uint32_t currenttick = osKernelGetTickCount();
   for(;;)
@@ -272,22 +268,36 @@ void sensorImplausibilityMonitoring(void *argument)
     if (throttlebody_normal_function_duration > THROTTLEBODY_BACK_TO_NORMAL_TIMEOUT) {
       throttle_not_at_intended_implausibility = 0;
     }
+    
 
     //the following code checks if there is hard braking and open throttle at the same time
 
-    throttle_and_brakes_on_implausibility = actual_throttle_position > OPEN_THROTTLE_PERCENTAGE_THRESHOLD && brake_depression_percentage > HARD_BRAKING_PERCENTAGE_THRESHOLD;
+    throttle_and_brakes_on_implausibility = brake_depression_percentage > HARD_BRAKING_PERCENTAGE_THRESHOLD; //&& actual_throttle_position > OPEN_THROTTLE_PERCENTAGE_THRESHOLD;
 
     //the following will shut down the throttle body power if there is any issue with the sensors
-    if (sensor_can_reception_implausibility || sensor_data_implausibility) {
+    if (sensor_can_reception_implausibility || sensor_data_implausibility || throttle_not_at_intended_implausibility) {
       HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET); //throttle relay
+      throttlerelay = 1;
     } else {
       HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET); //throttle relay
+      throttlerelay = 0;
     }
 
+
     if (throttle_not_at_intended_implausibility) {
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET); //shutdown relay
+      potential_throttle_stuck_duration += IMPLAUSIBILITY_CHECK_INTERVAL;
+      throttlebody_not_stuck_duration = 0;
     } else {
+      throttlebody_not_stuck_duration += IMPLAUSIBILITY_CHECK_INTERVAL;
+      potential_throttle_stuck_duration = 0;
+    }
+    if (potential_throttle_stuck_duration > OPEN_SHUTDOWN_CIRCUIT_TIMEOUT) {
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET); //shutdown relay
+      shutdownrelay = 1;      
+    } 
+    if (throttlebody_not_stuck_duration > CLOSE_SHUTDOWN_CIRCUIT_TIMEOUT) {
       HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET); //shutdown relay
+      shutdownrelay = 0;
     }
 
     currenttick += IMPLAUSIBILITY_CHECK_INTERVAL;
@@ -355,6 +365,9 @@ void readsensordata(void *argument)
       shiftnumber = candata[SHIFT_COUNT_OFFSET];
       shiftdir = candata[SHIFT_DIR_OFFSET];
     }
+    if (id == BSPD_CAN_ID) {
+      bspd = candata_2_byte[BSPD_CAN_OFFSET];
+    }
 
     actual_throttle_position = LINEAR((int)tps1, RAW_TPS1_TO_THROTTLE_PERCENTAGE_SLOPE, RAW_TPS1_TO_THROTTLE_PERCENTAGE_INTERCEPT);
     gas_pedal_position = LINEAR((int)apps1, RAW_APPS1_TO_PEDAL_PERCENTAGE_SLOPE, RAW_APPS1_TO_PEDAL_PERCENTAGE_INTERCEPT);
@@ -415,68 +428,6 @@ void paddleshift(void *argument)
   /* USER CODE END paddleshift */
 }
 
-/* USER CODE BEGIN Header_throttlePID */
-/**
-* @brief Function implementing the throttlePID thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_throttlePID */
-void throttlePID(void *argument)
-{
-  /* USER CODE BEGIN throttlePID */
-  /* Infinite loop */
-
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET); //throttle relay
-  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET); //polulu direction forward
-
-  uint32_t currenttick = osKernelGetTickCount();
-
-  int integral = 0;
-  int previouserror = 0;
-
-  for(;;)
-  {
-    currenttick += PID_DT;
-    osDelayUntil(currenttick);
-
-    int proportion = 0;
-    int derivative = 0;
-    int change_in_integral = 0;
-
-    int error = target_throttle_position - actual_throttle_position;
-
-    if (error > 0) {
-      proportion = error * PID_FORWARD_P;
-      change_in_integral = PID_DT * error * PID_FORWARD_I;
-      derivative = (error - previouserror) * PID_FORWARD_D / PID_DT;
-    } else {
-      proportion = error * PID_BACKWARD_P;
-      change_in_integral = PID_DT * error * PID_BACKWARD_I;
-      derivative = (error - previouserror) * PID_BACKWARD_D / PID_DT;
-    }
-
-    previouserror = error;
-    
-    integral = (change_in_integral / 1000) + integral;
-    int finalresult = ((proportion + derivative) / 1000) + integral;
-    
-    if (finalresult > 0) {
-      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET); //polulu direction forward
-    } else {
-      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_SET); //polulu direction reverse
-      finalresult *= -1;
-    }
-
-    if (finalresult > MAX_THROTTLE_MOTOR_PWM) {
-      finalresult = MAX_THROTTLE_MOTOR_PWM;
-    }
-  
-    __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, finalresult);
-  }
-  /* USER CODE END throttlePID */
-}
-
 /* USER CODE BEGIN Header_throttlePositionControl */
 /**
 * @brief Function implementing the throttlePositionControl thread.
@@ -492,15 +443,20 @@ void throttlePositionControl(void *argument)
   osDelay(100);
   uint32_t currenttick = osKernelGetTickCount();
 
-
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET); //throttle relay
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET); //polulu direction forward
   
   int integral = 0;
   int previouserror = 0;
 
   for(;;)
   {
+    //this series of if statements determines what controls the throttle
+
     if (sensor_can_reception_implausibility || sensor_data_implausibility || throttle_not_at_intended_implausibility) {
-      target_throttle_position = 0;
+      target_throttle_position = THROTTLE_CLOSURE_TARGET;
+      integral = 0;
+      previouserror = 0;
     } else if (throttle_and_brakes_on_implausibility) {
       target_throttle_position = THROTTLE_IDLE_TARGET;
     } else if (shiftblipactive) {
@@ -510,6 +466,8 @@ void throttlePositionControl(void *argument)
     }
 
     
+    //the following code calculates throttel PID control
+
     int proportion = 0;
     int derivative = 0;
     int change_in_integral = 0;
@@ -567,7 +525,7 @@ void serialMonitoring(void *argument)
 
   for(;;)
   { 
-    sprintf(buffer, "apps1: %lu\t| apps2: %lu\t| tps1: %lu\t| tps2: %lu\t| bs1: %lu\t| bs2: %lu\t| target: %d\t| actual: %d\t| apps1reception: %lu\t| tps1reception: %lu\t| sd: %u\t| sc: %u\t| ts: %u\t| tb: %u\r\n", apps1, apps2, tps1, tps2, bse1, bse2, target_throttle_position, actual_throttle_position, osKernelGetTickCount() - apps1_updation, osKernelGetTickCount() - tps1_updation, sensor_data_implausibility, sensor_can_reception_implausibility, throttle_not_at_intended_implausibility, throttle_and_brakes_on_implausibility);
+    sprintf(buffer, "apps1: %lu\t| apps2: %lu\t| tps1: %lu\t| tps2: %lu\t| bs1: %lu\t| bs2: %lu\t| target: %d\t| actual: %d\t| apps1reception: %lu\t| tps1reception: %lu\t| sd: %u\t| sc: %u\t| ts: %u\t| tb: %u\t| sr: %u\t| tr: %u\t| bspd: %u\r\n", apps1, apps2, tps1, tps2, bse1, bse2, target_throttle_position, actual_throttle_position, osKernelGetTickCount() - apps1_updation, osKernelGetTickCount() - tps1_updation, sensor_data_implausibility, sensor_can_reception_implausibility, throttle_not_at_intended_implausibility, throttle_and_brakes_on_implausibility, shutdownrelay, throttlerelay, bspd);
 
     HAL_UART_Transmit(&huart1, (const uint8_t *)buffer, strlen(buffer), osWaitForever);
 
