@@ -74,8 +74,12 @@ volatile uint8_t shiftdir = 0;
 volatile uint8_t currentshiftnum = 1;
 volatile uint32_t mostrecentshift;
 
+volatile uint32_t rpm;
+volatile uint32_t coolant;
+
 volatile int actual_throttle_position;  //number from 0 to 1000 representing 0% to 100% actuation
 volatile int actual_throttle_position_2nd_sensor; //same thing but calculated from other tps
+volatile int target_idle_throttle_position;
 volatile int target_throttle_position;
 
 volatile int gas_pedal_position;  //number from 0 to 1000 representing 0% to 100%
@@ -96,7 +100,6 @@ volatile uint8_t throttle_and_brakes_on_implausibility = 0;
 volatile uint8_t throttle_not_at_intended_implausibility = 0;
 volatile uint8_t shutdownrelay = 0;
 volatile uint8_t throttlerelay = 0;
-
 volatile uint8_t useapps = 1;
 
 volatile uint8_t shiftblipactive = 0;
@@ -139,6 +142,13 @@ const osThreadAttr_t serialMonitoring_attributes = {
   .name = "serialMonitoring",
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 512 * 4
+};
+/* Definitions for rpmIdle */
+osThreadId_t rpmIdleHandle;
+const osThreadAttr_t rpmIdle_attributes = {
+  .name = "rpmIdle",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 128 * 4
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -186,6 +196,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of serialMonitoring */
   serialMonitoringHandle = osThreadNew(serialMonitoring, NULL, &serialMonitoring_attributes);
 
+  /* creation of rpmIdle */
+  rpmIdleHandle = osThreadNew(rpmIdle, NULL, &rpmIdle_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -207,14 +220,8 @@ void sensorImplausibilityMonitoring(void *argument)
   /* USER CODE BEGIN sensorImplausibilityMonitoring */
   /* Infinite loop */
 
-  osDelay(100);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
-  osDelay(100);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET); //led
-  osDelay(100);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led  
 
-
+  osDelay(500);
 
   uint32_t potential_sensor_issue_duration = 0;
   uint32_t sensor_normal_function_duration = 0;
@@ -272,7 +279,7 @@ void sensorImplausibilityMonitoring(void *argument)
 
     //the following code checks if there is hard braking and open throttle at the same time
 
-    throttle_and_brakes_on_implausibility = brake_depression_percentage > HARD_BRAKING_PERCENTAGE_THRESHOLD; //&& actual_throttle_position > OPEN_THROTTLE_PERCENTAGE_THRESHOLD;
+    throttle_and_brakes_on_implausibility = brake_depression_percentage > HARD_BRAKING_PERCENTAGE_THRESHOLD;
 
     //the following will shut down the throttle body power if there is any issue with the sensors
     if (sensor_can_reception_implausibility || sensor_data_implausibility || throttle_not_at_intended_implausibility) {
@@ -334,39 +341,44 @@ void readsensordata(void *argument)
     currenttick = osKernelGetTickCount();
 
     uint8_t * candata = currentmessage.canrxdata;
-    uint16_t * candata_2_byte = (uint16_t *)(currentmessage.canrxdata);
     uint32_t id = currentmessage.rxheader.Identifier;
     
     if (id == APPS1_CAN_ID) {
-      apps1 = candata_2_byte[APPS1_CAN_OFFSET];
+      apps1 = GET_16BIT_LITTLEENDIAN_CAN_VALUE(candata, APPS1_CAN_OFFSET);
       apps1_updation = currenttick;
     }
     if (id == APPS2_CAN_ID) {
-      apps2 = candata_2_byte[APPS2_CAN_OFFSET];
+      apps2 = GET_16BIT_LITTLEENDIAN_CAN_VALUE(candata, APPS2_CAN_OFFSET);
       apps2_updation = currenttick;      
     }
     if (id == TPS1_CAN_ID) {
-      tps1 = candata_2_byte[TPS1_CAN_OFFSET];
+      tps1 = GET_16BIT_LITTLEENDIAN_CAN_VALUE(candata, TPS1_CAN_OFFSET);
       tps1_updation = currenttick;
     }
     if (id == TPS2_CAN_ID) {
-      tps2 = candata_2_byte[TPS2_CAN_OFFSET];
+      tps2 = GET_16BIT_LITTLEENDIAN_CAN_VALUE(candata, TPS2_CAN_OFFSET);
       tps2_updation = currenttick;
     }
     if (id == BS1_CAN_ID) {
-      bse1 = candata_2_byte[BS1_CAN_OFFSET];
+      bse1 = GET_16BIT_LITTLEENDIAN_CAN_VALUE(candata, BS1_CAN_OFFSET);
       bs1_updation = currenttick;
     }
     if (id == BS2_CAN_ID) {
-      bse2 = candata_2_byte[BS2_CAN_OFFSET];
+      bse2 = GET_16BIT_LITTLEENDIAN_CAN_VALUE(candata, BS2_CAN_OFFSET);
       bs2_updation = currenttick;
     }
+    if (id == RPM_CAN_ID) {
+      rpm = GET_16BIT_BIGENDIAN_CAN_VALUE(candata, RPM_CAN_OFFSET);
+    }
     if (id == SHIFT_ID) {
-      shiftnumber = candata[SHIFT_COUNT_OFFSET];
-      shiftdir = candata[SHIFT_DIR_OFFSET];
+      shiftnumber = GET_8BIT_CAN_VALUE(candata, SHIFT_COUNT_OFFSET);
+      shiftdir = GET_8BIT_CAN_VALUE(candata, SHIFT_DIR_OFFSET);
     }
     if (id == BSPD_CAN_ID) {
-      bspd = candata_2_byte[BSPD_CAN_OFFSET];
+      bspd = GET_16BIT_LITTLEENDIAN_CAN_VALUE(candata, BSPD_CAN_OFFSET);
+    }
+    if (id == COOLANT_CAN_ID) {
+      coolant = GET_16BIT_BIGENDIAN_CAN_VALUE(candata, COOLANT_CAN_OFFSET) / COOLANT_CAN_DIVIDE;
     }
 
     actual_throttle_position = LINEAR((int)tps1, RAW_TPS1_TO_THROTTLE_PERCENTAGE_SLOPE, RAW_TPS1_TO_THROTTLE_PERCENTAGE_INTERCEPT);
@@ -405,23 +417,23 @@ void paddleshift(void *argument)
         mostrecentshift = osKernelGetTickCount();
         if (shiftdir == 2) {
           //do shift 
-          shiftbliptarget = 800;
+          shiftbliptarget = SHIFT_BLIP_TARGET;
           shiftblipactive = 1;
           osDelay(50);
           HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET); //downshift relay
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET); //downshift relay
           osDelay(50);
           shiftblipactive = 0;
         } else if (shiftdir == 1) {
           //do shift cut over can????
           HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET); //upshift relay
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET); //upshift relay 
         }
         osDelay(SHIFT_SOLENOID_HOLD_TIME);
 
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET); //led
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); //downshift relay
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); //upshift relay
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); //upshift relay
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); //downshift relay
       }
     }
   }
@@ -442,31 +454,14 @@ void throttlePositionControl(void *argument)
 
   osDelay(100);
   uint32_t currenttick = osKernelGetTickCount();
-
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET); //throttle relay
-  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET); //polulu direction forward
   
   int integral = 0;
   int previouserror = 0;
 
   for(;;)
   {
-    //this series of if statements determines what controls the throttle
-
-    if (sensor_can_reception_implausibility || sensor_data_implausibility || throttle_not_at_intended_implausibility) {
-      target_throttle_position = THROTTLE_CLOSURE_TARGET;
-      integral = 0;
-      previouserror = 0;
-    } else if (throttle_and_brakes_on_implausibility) {
-      target_throttle_position = THROTTLE_IDLE_TARGET;
-    } else if (shiftblipactive) {
-      target_throttle_position = shiftbliptarget;
-    } else if (useapps) {
-      target_throttle_position = gas_pedal_position;
-    }
-
     
-    //the following code calculates throttel PID control
+    //the following code calculates throttle PID control
 
     int proportion = 0;
     int derivative = 0;
@@ -502,9 +497,27 @@ void throttlePositionControl(void *argument)
   
     __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, finalresult);
 
-
     currenttick += PID_DT;
     osDelayUntil(currenttick);
+
+    //this series of if statements determines what controls the throttle
+
+    if (sensor_can_reception_implausibility || sensor_data_implausibility || throttle_not_at_intended_implausibility) {
+      target_throttle_position = THROTTLE_CLOSURE_TARGET;
+      integral = 0;
+      previouserror = 0;
+    } else if (throttle_and_brakes_on_implausibility) {
+      target_throttle_position = target_idle_throttle_position;
+    } else if (shiftblipactive) {
+      target_throttle_position = shiftbliptarget;
+    } else if (useapps) {
+      if (gas_pedal_position < GAS_PEDAL_IDLE_THRESHOLD && rpm > STARTER_RPM) {
+        target_throttle_position = target_idle_throttle_position;
+      } else {
+        target_throttle_position = gas_pedal_position;
+      }
+    }
+
   }
   /* USER CODE END throttlePositionControl */
 }
@@ -521,17 +534,85 @@ void serialMonitoring(void *argument)
   /* USER CODE BEGIN serialMonitoring */
   /* Infinite loop */
 
-  char buffer[200];
+  char buffer[250];
 
   for(;;)
   { 
-    sprintf(buffer, "apps1: %lu\t| apps2: %lu\t| tps1: %lu\t| tps2: %lu\t| bs1: %lu\t| bs2: %lu\t| target: %d\t| actual: %d\t| apps1reception: %lu\t| tps1reception: %lu\t| sd: %u\t| sc: %u\t| ts: %u\t| tb: %u\t| sr: %u\t| tr: %u\t| bspd: %u\r\n", apps1, apps2, tps1, tps2, bse1, bse2, target_throttle_position, actual_throttle_position, osKernelGetTickCount() - apps1_updation, osKernelGetTickCount() - tps1_updation, sensor_data_implausibility, sensor_can_reception_implausibility, throttle_not_at_intended_implausibility, throttle_and_brakes_on_implausibility, shutdownrelay, throttlerelay, bspd);
+    sprintf(buffer, "apps1: %lu\t| apps2: %lu\t| tps1: %lu\t| tps2: %lu\t| bs1: %lu\t| bs2: %lu\t| target: %d\t| actual: %d\t| apps1reception: %lu\t| tps1reception: %lu\t| sd: %u\t| sc: %u\t| ts: %u\t| tb: %u\t| sr: %u\t| tr: %u\t| bspd: %lu\t| rpm: %lu\t| temp: %lu\r\n", apps1, apps2, tps1, tps2, bse1, bse2, target_throttle_position, actual_throttle_position, osKernelGetTickCount() - apps1_updation, osKernelGetTickCount() - tps1_updation, sensor_data_implausibility, sensor_can_reception_implausibility, throttle_not_at_intended_implausibility, throttle_and_brakes_on_implausibility, shutdownrelay, throttlerelay, bspd, rpm, coolant);
 
     HAL_UART_Transmit(&huart1, (const uint8_t *)buffer, strlen(buffer), osWaitForever);
 
     osDelay(100);
   }
   /* USER CODE END serialMonitoring */
+}
+
+/* USER CODE BEGIN Header_rpmIdle */
+/**
+* @brief Function implementing the rpmIdle thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_rpmIdle */
+void rpmIdle(void *argument)
+{
+  /* USER CODE BEGIN rpmIdle */
+  /* Infinite loop */
+
+  uint32_t currenttick = osKernelGetTickCount();
+
+  int integral = 0;
+  int previouserror = 0;
+
+  for(;;)
+  {
+
+    if (gas_pedal_position > GAS_PEDAL_IDLE_THRESHOLD) {
+      integral = 0;
+      previouserror = 0;
+    }
+
+    int proportion = 0;
+    int derivative = 0;
+    int change_in_integral = 0;
+
+    int error;
+    if (coolant > IDLE_TEMP_STEPDOWN_THRESHOLD) {
+      error = RPM_HOT_IDLE_TARGET - rpm;
+    } else {
+      error = RPM_COLD_IDLE_TARGET - rpm;
+    }
+
+    proportion = error * PID_RPM_P;
+    change_in_integral = PID_RPM_DT * error * PID_RPM_I;
+    derivative = (error - previouserror) * PID_RPM_D / PID_RPM_DT;
+
+    previouserror = error;
+    
+    integral = (change_in_integral / 10000) + integral;
+    int finalresult = ((proportion + derivative) / 1000) + integral;
+
+    if (coolant > IDLE_TEMP_STEPDOWN_THRESHOLD) {
+      if (finalresult > RPM_HOT_IDLE_MAX_THROTTLE) {
+        finalresult = RPM_HOT_IDLE_MAX_THROTTLE;
+      }
+    } else {
+      if (finalresult > RPM_COLD_IDLE_MAX_THROTTLE) {
+        finalresult = RPM_COLD_IDLE_MAX_THROTTLE;
+      }
+    }
+
+    if (finalresult < THROTTLE_CLOSURE_TARGET) {
+      finalresult = THROTTLE_CLOSURE_TARGET;
+    }
+
+    target_idle_throttle_position = finalresult;
+
+    currenttick += PID_RPM_DT;
+    osDelayUntil(currenttick);    
+
+  }
+  /* USER CODE END rpmIdle */
 }
 
 /* Private application code --------------------------------------------------*/

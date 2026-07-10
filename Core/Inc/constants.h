@@ -54,7 +54,7 @@ extern "C" {
 #define OPEN_THROTTLE_PERCENTAGE_THRESHOLD          400
 
 
-//the following pid tuning values are all divided by 1000 in th code, multiply the desired value you are inputting by 1000 and input it here
+//the following pid tuning values are for throttle flap control, all are divided by 1000 in th code, multiply the desired value you are inputting by 1000 and input it here
 
 #define PID_FORWARD_P   1700
 #define PID_BACKWARD_P  1700
@@ -69,21 +69,25 @@ extern "C" {
 #define APPS1_CAN_ID        210
 #define APPS1_CAN_OFFSET    0
 #define APPS2_CAN_ID        215
-#define APPS2_CAN_OFFSET    3
+#define APPS2_CAN_OFFSET    6
 #define TPS1_CAN_ID         215
-#define TPS1_CAN_OFFSET     2
+#define TPS1_CAN_OFFSET     4
 #define TPS2_CAN_ID         215
-#define TPS2_CAN_OFFSET     1
+#define TPS2_CAN_OFFSET     2
 #define BS1_CAN_ID          215
 #define BS1_CAN_OFFSET      0
 #define BS2_CAN_ID          214
-#define BS2_CAN_OFFSET      3
+#define BS2_CAN_OFFSET      6
 
-#define RPM_CAN_ID          283428934 //?? dont know this one need to get it
-#define RPM_CAN_OFFSET      0
+#define COOLANT_CAN_ID      1522
+#define COOLANT_CAN_OFFSET  6
+#define COOLANT_CAN_DIVIDE  10
+
+#define RPM_CAN_ID          1520 
+#define RPM_CAN_OFFSET      6     //since this is 2 byte number, offset 3 means offset 6 bytes.
 
 #define BSPD_CAN_ID         214
-#define BSPD_CAN_OFFSET     2
+#define BSPD_CAN_OFFSET     4
 
 #define SHIFT_ID            172
 #define SHIFT_DIR_OFFSET    0
@@ -104,16 +108,39 @@ extern "C" {
 #define OPEN_SHUTDOWN_CIRCUIT_TIMEOUT           600
 #define CLOSE_SHUTDOWN_CIRCUIT_TIMEOUT          1200
 
-#define IMPLAUSIBILITY_CHECK_INTERVAL           2
+#define IMPLAUSIBILITY_CHECK_INTERVAL           10
 
-//the following determines throttle idle position, it is a number from 0 to 1000, representing 0% to 100% actuation
+//the following determines gas pedal threshold for using idle pid
 
-#define THROTTLE_IDLE_TARGET        100
-#define THROTTLE_CLOSURE_TARGET     0
+#define GAS_PEDAL_IDLE_THRESHOLD    100     //using PID idle control when gas pedal below 10%
 
-//the following is the raw rpm value for engine idle
+//the following determines what is considered closed throttle
 
-#define IDLE_RPM    1500
+#define THROTTLE_CLOSURE_TARGET     0       //throttle closure means throttle at 0%
+
+//the following determines how much blip the downshift should get
+
+#define SHIFT_BLIP_TARGET       800 //80%
+
+//the following pid tuning values are for the idle rpm contol, all are divided by 1000 in the code, multiply your wanted values by 1000 before inputting them here.
+
+#define PID_RPM_P       500
+#define PID_RPM_I       0
+#define PID_RPM_D       0
+#define PID_RPM_DT      20
+
+//the following determines hot vs cold idle targets and thresholds for controlling idle
+
+#define RPM_HOT_IDLE_MAX_THROTTLE       400     //40%
+#define RPM_COLD_IDLE_MAX_THROTTLE      400     //40%
+#define RPM_HOT_IDLE_TARGET             1800    //rpm
+#define RPM_COLD_IDLE_TARGET            1800    //rpm
+#define IDLE_TEMP_STEPDOWN_THRESHOLD    170     //170 degrees fahrenheit
+
+//the following is the rpm that the starter motor spins at
+
+#define STARTER_RPM     300
+
 
 //the following determines maximum allowable current for running the throttle, it is a number from 0 to 1000 representing 0% to 100%
 
@@ -149,6 +176,13 @@ extern "C" {
 
 #define RAW_BS2_TO_BRAKE_PERCENTAGE_SLOPE               SLOPE(1000, 0, BSE2_OPERATION_UB, BSE2_OPERATION_LB)
 #define RAW_BS2_TO_BRAKE_PERCENTAGE_INTERCEPT           INTERCEPT(1000, 0, BSE2_OPERATION_UB, BSE2_OPERATION_LB)
+
+//the following defines big and little endian conversion for getting can values
+
+#define GET_16BIT_LITTLEENDIAN_CAN_VALUE(pointer_8bit, offset) (((uint16_t *)pointer_8bit)[offset / 2])
+#define GET_16BIT_BIGENDIAN_CAN_VALUE(pointer_8bit, offset) (((uint16_t)(pointer_8bit)[(offset) + 1]) | ((uint16_t)(pointer_8bit)[(offset)] << 8))
+#define GET_8BIT_CAN_VALUE(pointer_8bit, offset) ((pointer_8bit)[(offset)])
+
 
 
 #ifdef __cplusplus
