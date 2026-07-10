@@ -95,7 +95,11 @@ extern "C" {
 
 //the following are timing constants
 
-#define SHIFT_SOLENOID_HOLD_TIME                100
+#define UPSHIFT_SOLENOID_HOLD_TIME              80
+#define DOWNSHIFT_SOLENOID_HOLD_TIME            80
+#define THROTTLE_BLIP_DELAY                     50
+#define DISTANCE_BETWEEN_SHIFTS                 120
+
 
 #define THROTTLE_UPDATION_DELTA                 2
 
@@ -127,15 +131,18 @@ extern "C" {
 #define PID_RPM_P       500
 #define PID_RPM_I       0
 #define PID_RPM_D       0
-#define PID_RPM_DT      20
+#define PID_RPM_DT      10
+#define PID_RPM_SAVE_P  800
 
 //the following determines hot vs cold idle targets and thresholds for controlling idle
 
 #define RPM_HOT_IDLE_MAX_THROTTLE       400     //40%
 #define RPM_COLD_IDLE_MAX_THROTTLE      400     //40%
 #define RPM_HOT_IDLE_TARGET             1800    //rpm
-#define RPM_COLD_IDLE_TARGET            1800    //rpm
+#define RPM_COLD_IDLE_TARGET            2200    //rpm
 #define IDLE_TEMP_STEPDOWN_THRESHOLD    170     //170 degrees fahrenheit
+#define RPM_TOO_LOW_THRESHOLD           1300     //rpm
+
 
 //the following is the rpm that the starter motor spins at
 
@@ -145,6 +152,10 @@ extern "C" {
 //the following determines maximum allowable current for running the throttle, it is a number from 0 to 1000 representing 0% to 100%
 
 #define MAX_THROTTLE_MOTOR_PWM    1000
+
+//throttle map?
+
+// percentopen = -0.0000355x^3 + 0.01176x^2 - 0.01x   where x is actuation
 
 //the following slopes and intercepts are all calculated with equations, they shouldnt need to be modified, just change the OPERATION_UB and OPERATION_LB values above
 // "percentages" are represented as a number from 0 to 1000, corresponding to 0% and 100%

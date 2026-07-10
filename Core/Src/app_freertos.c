@@ -389,6 +389,9 @@ void readsensordata(void *argument)
 
     brake_depression_percentage = LINEAR((int)bse1, RAW_BS1_TO_BRAKE_PERCENTAGE_SLOPE, RAW_BS1_TO_BRAKE_PERCENTAGE_INTERCEPT);
     brake_depression_percentage_2nd_sensor = LINEAR((int)bse2, RAW_BS2_TO_BRAKE_PERCENTAGE_SLOPE, RAW_BS2_TO_BRAKE_PERCENTAGE_INTERCEPT);
+
+
+
   }
   /* USER CODE END readsensors */
 }
@@ -413,27 +416,27 @@ void paddleshift(void *argument)
 
     if (currentshiftnum != shiftnumber) {
       currentshiftnum = shiftnumber;
-      if ((osKernelGetTickCount() - mostrecentshift) > (SHIFT_SOLENOID_HOLD_TIME + 60)) {
+      if ((osKernelGetTickCount() - mostrecentshift) > DISTANCE_BETWEEN_SHIFTS) {
         mostrecentshift = osKernelGetTickCount();
-        if (shiftdir == 2) {
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
+        
+        if (shiftdir == 2) { //downshift
           //do shift 
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET); //downshift relay
+          osDelay(THROTTLE_BLIP_DELAY);
           shiftbliptarget = SHIFT_BLIP_TARGET;
           shiftblipactive = 1;
-          osDelay(50);
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET); //downshift relay
-          osDelay(50);
+          osDelay(DOWNSHIFT_SOLENOID_HOLD_TIME);
           shiftblipactive = 0;
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); //downshift relay
         } else if (shiftdir == 1) {
           //do shift cut over can????
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
           HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET); //upshift relay 
+          osDelay(UPSHIFT_SOLENOID_HOLD_TIME);
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); //upshift relay
         }
-        osDelay(SHIFT_SOLENOID_HOLD_TIME);
 
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET); //led
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); //upshift relay
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); //downshift relay
       }
     }
   }
@@ -583,9 +586,16 @@ void rpmIdle(void *argument)
       error = RPM_COLD_IDLE_TARGET - rpm;
     }
 
-    proportion = error * PID_RPM_P;
-    change_in_integral = PID_RPM_DT * error * PID_RPM_I;
-    derivative = (error - previouserror) * PID_RPM_D / PID_RPM_DT;
+    if (rpm > RPM_TOO_LOW_THRESHOLD) {
+      proportion = error * PID_RPM_P;
+      change_in_integral = PID_RPM_DT * error * PID_RPM_I;
+      derivative = (error - previouserror) * PID_RPM_D / PID_RPM_DT;
+    } else {
+      proportion = error * PID_RPM_SAVE_P;
+      change_in_integral = PID_RPM_DT * error * PID_RPM_I;
+      derivative = (error - previouserror) * PID_RPM_D / PID_RPM_DT;
+    }
+
 
     previouserror = error;
     
