@@ -56,10 +56,12 @@ extern "C" {
 
 //the following pid tuning values are for throttle flap control, all are divided by 1000 in th code, multiply the desired value you are inputting by 1000 and input it here
 
-#define PID_FORWARD_P   1700
-#define PID_BACKWARD_P  1700
-#define PID_FORWARD_I   15
-#define PID_BACKWARD_I  15
+#define PID_LOW_BACKWARD_P  300
+#define PID_LOW_BACKWARD_I  15
+#define PID_FORWARD_P   1900
+#define PID_BACKWARD_P  600
+#define PID_FORWARD_I   35
+#define PID_BACKWARD_I  30
 #define PID_FORWARD_D   0
 #define PID_BACKWARD_D  0
 #define PID_DT          1  //not divided by 1000. This value is in millisecond units, and represents time between each pid updation.
@@ -95,10 +97,11 @@ extern "C" {
 
 //the following are timing constants
 
-#define UPSHIFT_SOLENOID_HOLD_TIME              80
-#define DOWNSHIFT_SOLENOID_HOLD_TIME            80
+#define UPSHIFT_SOLENOID_HOLD_TIME              120
+#define DOWNSHIFT_SOLENOID_HOLD_TIME            160
 #define THROTTLE_BLIP_DELAY                     50
 #define DISTANCE_BETWEEN_SHIFTS                 120
+#define SHUTDOWN_CUT_DELAY                      10
 
 
 #define THROTTLE_UPDATION_DELTA                 2
@@ -136,12 +139,12 @@ extern "C" {
 
 //the following determines hot vs cold idle targets and thresholds for controlling idle
 
-#define RPM_HOT_IDLE_MAX_THROTTLE       400     //40%
-#define RPM_COLD_IDLE_MAX_THROTTLE      400     //40%
-#define RPM_HOT_IDLE_TARGET             1800    //rpm
-#define RPM_COLD_IDLE_TARGET            2200    //rpm
+#define RPM_HOT_IDLE_MAX_THROTTLE       200     //40%
+#define RPM_COLD_IDLE_MAX_THROTTLE      200     //40%
+#define RPM_HOT_IDLE_TARGET             2000    //rpm
+#define RPM_COLD_IDLE_TARGET            2000    //rpm
 #define IDLE_TEMP_STEPDOWN_THRESHOLD    170     //170 degrees fahrenheit
-#define RPM_TOO_LOW_THRESHOLD           1300     //rpm
+#define RPM_TOO_LOW_THRESHOLD           1500     //rpm
 
 
 //the following is the rpm that the starter motor spins at
@@ -153,9 +156,13 @@ extern "C" {
 
 #define MAX_THROTTLE_MOTOR_PWM    1000
 
+//the following constants define the curve that fit the quadratic
 //throttle map?
 
-// percentopen = -0.0000355x^3 + 0.01176x^2 - 0.01x   where x is actuation
+#define THROTTLE_MAP_A3  0
+#define THROTTLE_MAP_A2  100
+#define THROTTLE_MAP_A1  850    
+#define THROTTLE_MAP_A0  0
 
 //the following slopes and intercepts are all calculated with equations, they shouldnt need to be modified, just change the OPERATION_UB and OPERATION_LB values above
 // "percentages" are represented as a number from 0 to 1000, corresponding to 0% and 100%
@@ -163,8 +170,12 @@ extern "C" {
 #define SLOPE(y1, y2, x1, x2) ((y2 - y1) * 1000 / (x2 - x1))                      //m = (y2 - y1) / (x2 - x1)
 #define INTERCEPT(y1, y2, x1, x2) ((y1 * 1000) - (SLOPE(y1, y2, x1, x2) * x1))    //b = y2 - (m*x2)
 
-//this computes a cubic polynomial (ax^3 + bx^2 + cx + d). Only works with coefficients that are multiplied by 1000
-#define CUBIC(x, a, b, c, d) (((a*x*x*x) + (b*x*x) + (c*x) + d) / 1000) 
+//this computes a cubic polynomial (ax^3 + bx^2 + cx + d). Only works with coefficients that are multiplied by 100000
+#define CUBIC(x, a, b, c, d) (((a*x*x*x) + (b*x*x) + (c*x) + d) / 1000000
+
+//this computes a quadratic polynomial (ax^2 + bx + c). Only works with coefficients that are multiplied by 10000
+
+#define QUADRATIC(x, a, b, c) (((a*x*x) + (b*x) + c) / 100000) 
 
 //this computes a linear function (y = mx + b). Only works with slope and intercepts that are multiplied by 1000
 #define LINEAR(x, m, b) (((m*x) + b) / 1000)
@@ -188,11 +199,15 @@ extern "C" {
 #define RAW_BS2_TO_BRAKE_PERCENTAGE_SLOPE               SLOPE(1000, 0, BSE2_OPERATION_UB, BSE2_OPERATION_LB)
 #define RAW_BS2_TO_BRAKE_PERCENTAGE_INTERCEPT           INTERCEPT(1000, 0, BSE2_OPERATION_UB, BSE2_OPERATION_LB)
 
+#define APPS_PEDAL_PERCENT_TO_THROTTLE_2D_PERCENTAGE_SLOPE      SLOPE(69000, 1, 1000, 0)
+#define APPS_PEDAL_PERCENT_TO_THROTTLE_2D_PERCENTAGE_INTERCEPT  INTERCEPT(69000, 1, 1000, 0)
+
 //the following defines big and little endian conversion for getting can values
 
 #define GET_16BIT_LITTLEENDIAN_CAN_VALUE(pointer_8bit, offset) (((uint16_t *)pointer_8bit)[offset / 2])
 #define GET_16BIT_BIGENDIAN_CAN_VALUE(pointer_8bit, offset) (((uint16_t)(pointer_8bit)[(offset) + 1]) | ((uint16_t)(pointer_8bit)[(offset)] << 8))
 #define GET_8BIT_CAN_VALUE(pointer_8bit, offset) ((pointer_8bit)[(offset)])
+
 
 
 

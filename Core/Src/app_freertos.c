@@ -422,17 +422,25 @@ void paddleshift(void *argument)
         
         if (shiftdir == 2) { //downshift
           //do shift 
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET); //downshift relay
-          osDelay(THROTTLE_BLIP_DELAY);
-          shiftbliptarget = SHIFT_BLIP_TARGET;
-          shiftblipactive = 1;
-          osDelay(DOWNSHIFT_SOLENOID_HOLD_TIME);
-          shiftblipactive = 0;
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); //downshift relay
+            if (rpm < 9000) {
+              HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET); //downshift relay
+              osDelay(10);
+              shiftbliptarget = SHIFT_BLIP_TARGET;
+              shiftblipactive = 1;
+              osDelay(160);
+              shiftblipactive = 0;
+              osDelay(40);
+              HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); //downshift relay
+            }
         } else if (shiftdir == 1) {
           //do shift cut over can????
+          
           HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET); //upshift relay 
-          osDelay(UPSHIFT_SOLENOID_HOLD_TIME);
+          osDelay(80);
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET); //shutdown relay
+          osDelay(200);
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET); //shutdown relay
+          osDelay(100);
           HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); //upshift relay
         }
 
@@ -461,6 +469,9 @@ void throttlePositionControl(void *argument)
   int integral = 0;
   int previouserror = 0;
 
+  uint8_t resetonforward = 1;
+  uint8_t resetonbackward = 1;
+
   for(;;)
   {
     
@@ -473,12 +484,27 @@ void throttlePositionControl(void *argument)
     int error = target_throttle_position - actual_throttle_position;
 
     if (error > 0) {
+      if (resetonforward) {
+        resetonforward = 0;
+        integral = 0;
+      }
+      resetonbackward = 1;
       proportion = error * PID_FORWARD_P;
       change_in_integral = PID_DT * error * PID_FORWARD_I;
       derivative = (error - previouserror) * PID_FORWARD_D / PID_DT;
     } else {
-      proportion = error * PID_BACKWARD_P;
-      change_in_integral = PID_DT * error * PID_BACKWARD_I;
+      if (resetonbackward) {
+        resetonbackward = 0;
+        integral = 0;
+      }
+      resetonforward = 1;
+      if (actual_throttle_position > 200) {
+        proportion = error * PID_BACKWARD_P;
+        change_in_integral = PID_DT * error * PID_BACKWARD_I;
+      } else {
+        proportion = error * PID_LOW_BACKWARD_P;
+        change_in_integral = PID_DT * error * PID_LOW_BACKWARD_I;
+      }
       derivative = (error - previouserror) * PID_BACKWARD_D / PID_DT;
     }
 
@@ -504,21 +530,18 @@ void throttlePositionControl(void *argument)
     osDelayUntil(currenttick);
 
     //this series of if statements determines what controls the throttle
-
     if (sensor_can_reception_implausibility || sensor_data_implausibility || throttle_not_at_intended_implausibility) {
       target_throttle_position = THROTTLE_CLOSURE_TARGET;
       integral = 0;
       previouserror = 0;
-    } else if (throttle_and_brakes_on_implausibility) {
-      target_throttle_position = target_idle_throttle_position;
     } else if (shiftblipactive) {
       target_throttle_position = shiftbliptarget;
-    } else if (useapps) {
-      if (gas_pedal_position < GAS_PEDAL_IDLE_THRESHOLD && rpm > STARTER_RPM) {
-        target_throttle_position = target_idle_throttle_position;
-      } else {
-        target_throttle_position = gas_pedal_position;
-      }
+    } else if (throttle_and_brakes_on_implausibility && rpm > STARTER_RPM) {
+      target_throttle_position = target_idle_throttle_position;
+    } else if (gas_pedal_position < GAS_PEDAL_IDLE_THRESHOLD && rpm > STARTER_RPM) {
+      target_throttle_position = target_idle_throttle_position;
+    } else {
+      target_throttle_position = QUADRATIC(gas_pedal_position, THROTTLE_MAP_A2, THROTTLE_MAP_A1, THROTTLE_MAP_A0);
     }
 
   }
