@@ -163,7 +163,7 @@ const osThreadAttr_t rpmIdle_attributes = {
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
-
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -381,6 +381,19 @@ void readsensordata(void *argument)
       coolant = GET_16BIT_BIGENDIAN_CAN_VALUE(candata, COOLANT_CAN_OFFSET) / COOLANT_CAN_DIVIDE;
     }
 
+    //Ceiling and floor checks which map apps value to operational bound if value out 
+    // of operational bound but inside absolute bounds.
+    if (apps1 < APPS1_OPERATION_LB && apps1 > APPS1_LB) {
+      apps1 = APPS1_OPERATION_LB;
+    } else if (apps1 > APPS1_OPERATION_UB && apps1 < APPS1_UB) {
+      apps1 = APPS1_OPERATION_UB;
+    }
+    if (apps2 < APPS2_OPERATION_LB && apps2 > APPS2_LB) {
+      apps2 = APPS2_OPERATION_LB;
+    } else if (apps2 > APPS2_OPERATION_UB && apps2 < APPS2_UB) {
+      apps2 = APPS2_OPERATION_UB;
+    }
+
     actual_throttle_position = LINEAR((int)tps1, RAW_TPS1_TO_THROTTLE_PERCENTAGE_SLOPE, RAW_TPS1_TO_THROTTLE_PERCENTAGE_INTERCEPT);
     gas_pedal_position = LINEAR((int)apps1, RAW_APPS1_TO_PEDAL_PERCENTAGE_SLOPE, RAW_APPS1_TO_PEDAL_PERCENTAGE_INTERCEPT);
 
@@ -418,7 +431,7 @@ void paddleshift(void *argument)
       currentshiftnum = shiftnumber;
       if ((osKernelGetTickCount() - mostrecentshift) > DISTANCE_BETWEEN_SHIFTS) {
         mostrecentshift = osKernelGetTickCount();
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET); //led
         
         if (shiftdir == 2) { //downshift
           //do shift 
@@ -444,7 +457,7 @@ void paddleshift(void *argument)
           HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); //upshift relay
         }
 
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET); //led
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); //led
       }
     }
   }
