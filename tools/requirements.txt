@@ -1,0 +1,11 @@
+# pmbtune.py
+#
+# pyocd brings pyelftools with it, which is what resolves pmb_params / pmb_log
+# out of the ELF symbol table.  numpy does the least-squares fitting.
+# No scipy, no matplotlib, no OpenOCD.
+pyocd>=0.36
+numpy>=1.24
+
+# STM32C0 may need a CMSIS pack before pyocd knows the target:
+#   pyocd pack find stm32c092
+#   pyocd pack install stm32c092rctx

@@ -26,9 +26,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+/* board.h provides the family HAL header plus the peripheral/pin aliases, so
+ * no stm32c0xx_* include belongs here. */
+#include "board.h"
 #include "fdcanmessage.h"
-#include "stm32c0xx_hal_fdcan.h"
-#include "stm32c0xx_hal_tim.h"
 
 /* USER CODE END Includes */
 
@@ -129,8 +130,8 @@ int main(void)
 
   HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
 
-  HAL_TIM_PWM_Start(&htim16, TIM_CHANNEL_1);
-  TIM16->CCR1 = 0;
+  HAL_TIM_PWM_Start(THROTTLE_PWM_TIM, THROTTLE_PWM_CHANNEL);
+  THROTTLE_PWM_SET(0);
 
   /* USER CODE END 2 */
 
