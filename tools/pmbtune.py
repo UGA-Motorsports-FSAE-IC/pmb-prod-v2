@@ -4,12 +4,22 @@ pmbtune -- measure the throttle body, derive gains from the measurement, prove
 them before they go in the car.
 
 Transport is SWD only.  The firmware writes 16-byte samples into a RAM ring at
-the control rate; this reads that ring in bulk with pyocd.  Nothing is framed,
-nothing is parsed, and it works with any ST-Link.  Parameters are plain RAM
-globals, so changing a gain is a memory write -- there is no command protocol.
+the control rate; this reads that ring in bulk.  Nothing is framed, nothing is
+parsed, and it works with any ST-Link.  Parameters are plain RAM globals, so
+changing a gain is a memory write -- there is no command protocol.
 
 Addresses come out of the ELF symbol table, so a relink cannot desynchronise
 the host from the target.
+
+Two ways to reach the probe:
+
+    --backend pyocd   (default) direct USB. Needs a WinUSB-bound driver on
+                      Windows, which ST's own driver is not.
+    --backend gdb     via a running ST-LINK_gdbserver or OpenOCD on TCP. That
+                      server owns the probe, so on Windows it uses ST's driver
+                      and nothing needs rebinding:
+                        ST-LINK_gdbserver --swd --attach --port-number 61234
+                        pmbtune.py --backend gdb ...
 
     pmbtune.py rate                  what rate does TPS/rpm actually arrive at
     pmbtune.py limits                measure the mechanical stops
@@ -83,18 +93,36 @@ SAMPLE_COLS = ["t_ms", "sp", "pv", "pv2", "u", "rpm", "pedal"]
 # --------------------------------------------------------------------------
 
 def elf_symbols(elf_path: Path) -> dict[str, tuple[int, int]]:
-    from elftools.elf.elffile import ELFFile  # ships with pyocd
+    try:
+        from elftools.elf.elffile import ELFFile
+    except ImportError:
+        raise SystemExit(
+            "pyelftools is required to resolve symbol addresses.\n"
+            "  pip install -r tools/requirements.txt"
+        ) from None
 
-    with open(elf_path, "rb") as fh:
-        elf = ELFFile(fh)
-        tab = elf.get_section_by_name(".symtab")
-        if tab is None:
-            raise SystemExit(f"{elf_path} has no symbol table (built with -g0?)")
-        out = {}
-        for sym in tab.iter_symbols():
-            if sym.name:
-                out[sym.name] = (sym["st_value"], sym["st_size"])
-        return out
+    try:
+        with open(elf_path, "rb") as fh:
+            elf = ELFFile(fh)
+            tab = elf.get_section_by_name(".symtab")
+            if tab is None:
+                raise SystemExit(
+                    f"{elf_path} has no symbol table (built with -g0?)"
+                )
+            out = {}
+            for sym in tab.iter_symbols():
+                if sym.name:
+                    out[sym.name] = (sym["st_value"], sym["st_size"])
+            return out
+    except SystemExit:
+        raise
+    except OSError as exc:
+        raise SystemExit(f"could not read {elf_path}: {exc}") from None
+    except Exception as exc:
+        raise SystemExit(
+            f"{elf_path} does not look like an ELF file ({exc}).\n"
+            "Point --elf at build/Debug/pmb-prod-v2.elf."
+        ) from None
 
 
 def find_elf(explicit: str | None) -> Path:
@@ -111,19 +139,28 @@ def find_elf(explicit: str | None) -> Path:
     raise SystemExit("could not find a built ELF; pass --elf")
 
 
-class Target:
-    """Live connection. Attaches without halting -- the car keeps running."""
+# --------------------------------------------------------------------------
+# backends
+#
+# The whole tool needs exactly two operations from a debug probe: read a block
+# of bytes, and write one 32-bit word -- both while the target keeps running.
+# Everything else is built on those, so supporting a second probe stack is a
+# small class rather than a rewrite.
+#
+#   pyocd  default. Cross-platform, but on Windows it needs a WinUSB-bound
+#          driver, which ST's own driver is not.
+#   gdb    talks to an ST-LINK_gdbserver (or OpenOCD) over TCP. That server
+#          uses ST's driver, so it is the Windows answer when pyocd cannot see
+#          the probe and you do not want to rebind drivers with Zadig.
+# --------------------------------------------------------------------------
 
-    def __init__(self, elf: Path, target_name: str, frequency: int):
+class PyocdBackend:
+    """Attaches without halting -- the car keeps running."""
+
+    name = "pyocd"
+
+    def __init__(self, target_name: str, frequency: int):
         from pyocd.core.helpers import ConnectHelper
-
-        self.syms = elf_symbols(elf)
-        for needed in ("pmb_params", "pmb_tune", "pmb_log"):
-            if needed not in self.syms:
-                raise SystemExit(
-                    f"symbol '{needed}' missing from {elf}.\n"
-                    "Build the Debug preset: PMB_TUNING is Debug-only."
-                )
 
         self.session = ConnectHelper.session_with_chosen_probe(
             options={
@@ -136,34 +173,200 @@ class Target:
             blocking=False,
         )
         if self.session is None:
-            raise SystemExit("no debug probe found")
+            raise SystemExit(
+                "no debug probe found.\n"
+                "On Windows this usually means the driver is not WinUSB-bound; "
+                "see TUNING.md section 15.\nYou can instead run an "
+                "ST-LINK_gdbserver and pass --backend gdb, which works with "
+                "ST's own driver."
+            )
         self.session.open()
-        self.t = self.session.target
+        self._t = self.session.target
+
+    def read_block(self, addr: int, nbytes: int) -> bytes:
+        return bytes(self._t.read_memory_block8(addr, nbytes))
+
+    def write_u32(self, addr: int, value: int):
+        self._t.write_memory(addr, value & 0xFFFFFFFF)
+
+    def close(self):
+        self.session.close()
+
+
+def rsp_frame(payload: str) -> bytes:
+    """Wrap a GDB remote-serial-protocol payload: $<data>#<checksum>."""
+    csum = sum(payload.encode()) & 0xFF
+    return f"${payload}#{csum:02x}".encode()
+
+
+def rsp_checksum_ok(payload: str, csum_hex: str) -> bool:
+    return (sum(payload.encode()) & 0xFF) == int(csum_hex, 16)
+
+
+class GdbBackend:
+    """Memory access via the GDB remote protocol over TCP.
+
+    Point this at a gdbserver that is already attached to the running target:
+
+        ST-LINK_gdbserver --swd --attach --port-number 61234
+        # or: openocd -f interface/stlink.cfg -f target/stm32c0x.cfg
+
+    The server owns the probe, so on Windows it uses ST's driver and no
+    rebinding is needed.  Reads and writes go over the AHB access port and do
+    not halt the core, which is what lets this run against a live engine --
+    but see the --attach note: if the server halts on connect, nothing here
+    will un-halt it for you.
+
+    Only `m` (read memory) and `M` (write memory) are used.  No run control is
+    issued at all, deliberately: this tool must never be able to stop an engine
+    that is running.
+    """
+
+    name = "gdb"
+
+    def __init__(self, host: str, port: int, timeout: float = 5.0):
+        import socket
+
+        try:
+            self.sock = socket.create_connection((host, port), timeout=timeout)
+        except OSError as exc:
+            raise SystemExit(
+                f"could not connect to a gdbserver at {host}:{port} ({exc}).\n"
+                "Start one first, e.g.:\n"
+                "  ST-LINK_gdbserver --swd --attach --port-number 61234\n"
+                "Check the exact flags with `ST-LINK_gdbserver --help`; it "
+                "ships with STM32CubeCLT / CubeIDE."
+            ) from None
+        self.sock.settimeout(timeout)
+        self._buf = b""
+
+        # Negotiate, mostly to learn the maximum packet size so block reads can
+        # be chunked to fit.  Hex encoding doubles the payload, so the usable
+        # byte count is less than half of PacketSize.
+        self.max_read = 256
+        try:
+            reply = self._command("qSupported:multiprocess+")
+            for feat in reply.split(";"):
+                if feat.startswith("PacketSize="):
+                    size = int(feat.split("=", 1)[1], 16)
+                    self.max_read = max(64, min(1024, (size - 32) // 2))
+        except Exception:
+            pass  # a server that will not negotiate still answers m/M
+
+    # ---- RSP plumbing ----
+    def _recv_packet(self) -> str:
+        while True:
+            start = self._buf.find(b"$")
+            end = self._buf.find(b"#", start + 1)
+            if start >= 0 and end >= 0 and len(self._buf) >= end + 3:
+                payload = self._buf[start + 1:end].decode(errors="replace")
+                csum = self._buf[end + 1:end + 3].decode()
+                self._buf = self._buf[end + 3:]
+                self.sock.sendall(b"+")
+                if not rsp_checksum_ok(payload, csum):
+                    raise SystemExit("gdbserver packet failed its checksum")
+                return payload
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise SystemExit("gdbserver closed the connection")
+            self._buf += chunk
+
+    def _command(self, payload: str) -> str:
+        self.sock.sendall(rsp_frame(payload))
+        # _recv_packet scans for '$', so any '+'/'-' acks in front of the reply
+        # are skipped on the way.  An empty reply means "unsupported command"
+        # and must be returned, not waited past -- doing that deadlocks.
+        return self._recv_packet()
+
+    def read_block(self, addr: int, nbytes: int) -> bytes:
+        out = bytearray()
+        remaining = nbytes
+        cursor = addr
+        while remaining > 0:
+            run = min(remaining, self.max_read)
+            reply = self._command(f"m{cursor:x},{run:x}")
+            if reply.startswith("E") and len(reply) <= 3:
+                raise SystemExit(
+                    f"gdbserver refused a read at 0x{cursor:08X} ({reply}). "
+                    "Is it attached to the target?"
+                )
+            data = bytes.fromhex(reply)
+            if not data:
+                raise SystemExit(f"gdbserver returned no data at 0x{cursor:08X}")
+            out += data
+            cursor += len(data)
+            remaining -= len(data)
+        return bytes(out)
+
+    def write_u32(self, addr: int, value: int):
+        word = struct.pack("<I", value & 0xFFFFFFFF)
+        reply = self._command(f"M{addr:x},4:{word.hex()}")
+        if reply != "OK":
+            raise SystemExit(
+                f"gdbserver refused a write at 0x{addr:08X} ({reply})"
+            )
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def make_backend(args):
+    if args.backend == "gdb":
+        return GdbBackend(args.gdb_host, args.gdb_port)
+    return PyocdBackend(args.target_name, args.frequency)
+
+
+class Target:
+    """Live connection to the firmware's parameter block and telemetry ring.
+
+    Takes a factory rather than a live backend so the ELF is validated before
+    any hardware is touched, and so a failure during the post-connect handshake
+    still releases the probe.
+    """
+
+    def __init__(self, elf: Path, backend_factory):
+        self.syms = elf_symbols(elf)
+        for needed in ("pmb_params", "pmb_tune", "pmb_log"):
+            if needed not in self.syms:
+                raise SystemExit(
+                    f"symbol '{needed}' missing from {elf}.\n"
+                    "Build the Debug preset: PMB_TUNING is Debug-only."
+                )
 
         self.params_addr = self.syms["pmb_params"][0]
         self.tune_addr = self.syms["pmb_tune"][0]
         self.log_addr = self.syms["pmb_log"][0]
 
-        tune = self.read_tune()
-        if tune["magic"] != TUNE_MAGIC:
-            raise SystemExit(
-                f"pmb_tune.magic is 0x{tune['magic']:08X}, expected "
-                f"0x{TUNE_MAGIC:08X}. Stale ELF, or a Release build is flashed."
-            )
-        self.n_samples = tune["sample_count"]
-        if tune["sample_size"] != SAMPLE_SIZE:
-            raise SystemExit(
-                f"target sample is {tune['sample_size']} bytes, host expects "
-                f"{SAMPLE_SIZE}: tuning.h and pmbtune.py are out of sync"
-            )
-        self._cursor = tune["write_idx"]
-        self._hb = 0
+        self.backend = backend_factory()
+        try:
+            tune = self.read_tune()
+            if tune["magic"] != TUNE_MAGIC:
+                raise SystemExit(
+                    f"pmb_tune.magic is 0x{tune['magic']:08X}, expected "
+                    f"0x{TUNE_MAGIC:08X}. Stale ELF, or a Release build is "
+                    "flashed."
+                )
+            if tune["sample_size"] != SAMPLE_SIZE:
+                raise SystemExit(
+                    f"target sample is {tune['sample_size']} bytes, host "
+                    f"expects {SAMPLE_SIZE}: tuning.h and pmbtune.py are out "
+                    "of sync"
+                )
+            self.n_samples = tune["sample_count"]
+            self._cursor = tune["write_idx"]
+            self._hb = 0
+        except BaseException:
+            self.backend.close()
+            raise
 
     def close(self):
         try:
             self.inject_off()
         finally:
-            self.session.close()
+            self.backend.close()
 
     def __enter__(self):
         return self
@@ -173,11 +376,11 @@ class Target:
 
     # ---- raw ----
     def _read_words(self, addr: int, count: int) -> list[int]:
-        raw = bytes(self.t.read_memory_block8(addr, count * 4))
+        raw = self.backend.read_block(addr, count * 4)
         return list(struct.unpack("<" + "I" * count, raw))
 
     def _write_word(self, addr: int, value: int):
-        self.t.write_memory(addr, value & 0xFFFFFFFF)
+        self.backend.write_u32(addr, value)
 
     # ---- params ----
     def read_params(self) -> dict[str, int]:
@@ -245,8 +448,8 @@ class Target:
         while i < widx:
             slot = i % n
             run = min(widx - i, n - slot)
-            raw = bytes(self.t.read_memory_block8(
-                self.log_addr + slot * SAMPLE_SIZE, run * SAMPLE_SIZE))
+            raw = self.backend.read_block(
+                self.log_addr + slot * SAMPLE_SIZE, run * SAMPLE_SIZE)
             for k in range(run):
                 rows.append(struct.unpack_from(SAMPLE_FMT, raw, k * SAMPLE_SIZE))
             i += run
@@ -1105,6 +1308,15 @@ def main(argv=None):
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--elf", help="path to the built ELF (default: build/Debug)")
+    ap.add_argument("--backend", choices=("pyocd", "gdb"), default="pyocd",
+                    help="how to reach the probe. 'pyocd' talks to it directly "
+                         "(needs a WinUSB-bound driver on Windows). 'gdb' talks "
+                         "to a running ST-LINK_gdbserver or OpenOCD over TCP, "
+                         "which works with ST's own Windows driver")
+    ap.add_argument("--gdb-host", default="127.0.0.1",
+                    help="--backend gdb only")
+    ap.add_argument("--gdb-port", type=int, default=61234,
+                    help="--backend gdb only; ST-LINK_gdbserver defaults to 61234")
     ap.add_argument("--target-name", default="stm32c092rctx",
                     help="pyocd target type; run `pyocd pack find stm32c0` "
                          "and `pyocd pack install ...` if unknown")
@@ -1192,7 +1404,7 @@ def main(argv=None):
     if args.cmd not in NEEDS_TARGET:
         return handler(None, args)
 
-    with Target(find_elf(args.elf), args.target_name, args.frequency) as tgt:
+    with Target(find_elf(args.elf), lambda: make_backend(args)) as tgt:
         return handler(tgt, args)
 
 

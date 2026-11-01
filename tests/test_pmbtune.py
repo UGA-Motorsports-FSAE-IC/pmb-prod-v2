@@ -12,7 +12,10 @@ If this fails, every gain pmbtune prints is suspect.
 """
 
 import math
+import socket
+import struct
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -20,8 +23,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 
 from pmbtune import (  # noqa: E402
-    Plant, PidMirror, _arx_rows, arx_to_plant, fit_arx, fit_arx_iv, imc_pid,
-    simulate_step, step_metrics,
+    GdbBackend, Plant, PidMirror, _arx_rows, arx_to_plant, fit_arx, fit_arx_iv,
+    imc_pid, rsp_checksum_ok, rsp_frame, simulate_step, step_metrics,
 )
 
 # Ground truth: roughly a real electronic throttle body.
@@ -210,6 +213,155 @@ def test_pid_mirror_matches_the_c_semantics():
     print("  mirror matches pid.c on all shared cases")
 
 
+# ------------------------------------------------------------------------
+# GDB-server backend (the Windows path, where pyocd often cannot bind the
+# probe).  Exercised against a fake gdbserver so the RSP framing, chunking and
+# hex codec are actually tested -- none of which can be checked on hardware
+# from a dev machine.
+# ------------------------------------------------------------------------
+
+MEM_BASE = 0x20001000
+
+
+class FakeGdbServer:
+    """Minimal RSP server: qSupported, m (read), M (write). Nothing else."""
+
+    def __init__(self, image: bytearray, packet_size_hex="400"):
+        self.image = image
+        self.packet_size_hex = packet_size_hex
+        self.reads = []          # (addr, len) of every read served
+        self._sock = socket.socket()
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(1)
+        self.port = self._sock.getsockname()[1]
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self):
+        conn, _ = self._sock.accept()
+        buf = b""
+        try:
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                buf += chunk
+                while True:
+                    start = buf.find(b"$")
+                    end = buf.find(b"#", start + 1)
+                    if start < 0 or end < 0 or len(buf) < end + 3:
+                        break
+                    payload = buf[start + 1:end].decode()
+                    buf = buf[end + 3:]
+                    conn.sendall(b"+")
+                    conn.sendall(rsp_frame(self._handle(payload)))
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    def _handle(self, payload: str) -> str:
+        if payload.startswith("qSupported"):
+            return f"PacketSize={self.packet_size_hex};multiprocess+"
+        if payload.startswith("m"):
+            addr_s, len_s = payload[1:].split(",")
+            addr, length = int(addr_s, 16), int(len_s, 16)
+            self.reads.append((addr, length))
+            off = addr - MEM_BASE
+            if off < 0 or off + length > len(self.image):
+                return "E01"
+            return self.image[off:off + length].hex()
+        if payload.startswith("M"):
+            head, data = payload[1:].split(":")
+            addr_s, len_s = head.split(",")
+            addr, length = int(addr_s, 16), int(len_s, 16)
+            raw = bytes.fromhex(data)
+            assert len(raw) == length
+            off = addr - MEM_BASE
+            if off < 0 or off + length > len(self.image):
+                return "E01"
+            self.image[off:off + length] = raw
+            return "OK"
+        return ""   # unsupported -- must not deadlock the client
+
+
+def test_rsp_framing():
+    # Per the GDB remote protocol: $<payload>#<low byte of the payload sum, hex>
+    assert sum(b"m20001000,4") & 0xFF == 0x50
+    assert rsp_frame("m20001000,4") == b"$m20001000,4#50"
+    assert rsp_frame("OK") == b"$OK#9a"
+    assert rsp_frame("") == b"$#00"
+
+    assert rsp_checksum_ok("OK", "9a")
+    assert rsp_checksum_ok("OK", "9A")      # case-insensitive
+    assert not rsp_checksum_ok("OK", "00")
+    print("  RSP framing and checksums OK")
+
+
+def test_gdb_backend_reads_and_writes():
+    image = bytearray(struct.pack("<1024I", *range(1024)))   # 4 KB
+    srv = FakeGdbServer(image)
+    be = GdbBackend("127.0.0.1", srv.port, timeout=5.0)
+    try:
+        # PacketSize=0x400 -> usable bytes per read is (1024-32)//2 = 496
+        assert be.max_read == 496, be.max_read
+
+        # small read
+        got = be.read_block(MEM_BASE, 16)
+        assert got == image[:16], got.hex()
+
+        # read larger than one packet: must chunk and reassemble in order
+        got = be.read_block(MEM_BASE, 4096)
+        assert got == bytes(image), "chunked reassembly is wrong"
+        assert len(srv.reads) > 1, "4 KB should not have fitted in one packet"
+        assert all(n <= be.max_read for _, n in srv.reads)
+
+        # contiguous, non-overlapping chunks
+        chunk_reads = srv.reads[-9:]
+        expect = MEM_BASE
+        for addr, n in chunk_reads:
+            assert addr == expect, (hex(addr), hex(expect))
+            expect += n
+        assert expect == MEM_BASE + 4096
+
+        # write, then read it back
+        be.write_u32(MEM_BASE + 8, 0xDEADBEEF)
+        assert struct.unpack_from("<I", image, 8)[0] == 0xDEADBEEF
+        assert struct.unpack_from("<I", be.read_block(MEM_BASE + 8, 4))[0] \
+            == 0xDEADBEEF
+        print("  gdb backend read/write/chunking OK "
+              f"({len(srv.reads)} packets for 4 KB + 2)")
+    finally:
+        be.close()
+
+
+def test_gdb_backend_rejects_bad_address():
+    srv = FakeGdbServer(bytearray(64))
+    be = GdbBackend("127.0.0.1", srv.port, timeout=5.0)
+    try:
+        try:
+            be.read_block(MEM_BASE + 0x100000, 4)
+        except SystemExit as exc:
+            assert "refused a read" in str(exc), str(exc)
+            print("  gdb backend surfaces server errors OK")
+        else:
+            raise AssertionError("an out-of-range read should have raised")
+    finally:
+        be.close()
+
+
+def test_gdb_backend_survives_unsupported_command():
+    """An empty reply means 'unsupported'. Waiting past it would deadlock."""
+    srv = FakeGdbServer(bytearray(64), packet_size_hex="")   # unparseable
+    be = GdbBackend("127.0.0.1", srv.port, timeout=5.0)
+    try:
+        assert be.max_read == 256, "should fall back to the default chunk size"
+        assert be.read_block(MEM_BASE, 4) == bytes(4)
+        print("  gdb backend tolerates a non-negotiating server OK")
+    finally:
+        be.close()
+
+
 if __name__ == "__main__":
     for fn in (test_identification_recovers_the_plant,
                test_identification_is_robust_to_sensor_noise,
@@ -217,7 +369,11 @@ if __name__ == "__main__":
                test_bad_data_is_rejected,
                test_derive_gives_a_stable_loop,
                test_lambda_trades_speed_for_overshoot,
-               test_pid_mirror_matches_the_c_semantics):
+               test_pid_mirror_matches_the_c_semantics,
+               test_rsp_framing,
+               test_gdb_backend_reads_and_writes,
+               test_gdb_backend_rejects_bad_address,
+               test_gdb_backend_survives_unsupported_command):
         print(f"\n{fn.__name__}")
         fn()
     print("\nall pmbtune math checks passed")

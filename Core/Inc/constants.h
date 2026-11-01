@@ -53,6 +53,13 @@ extern "C" {
 #define MAX_THROTTLE_INTENDED_VS_ACTUAL_DEVIATION   200
 
 #define HARD_BRAKING_PERCENTAGE_THRESHOLD           160
+
+/* UNUSED.  throttle_and_brakes_on_implausibility checks brake pressure ONLY,
+ * so any hard brake drops the target to idle regardless of pedal position.
+ * The name and this constant both suggest the intent was to require brake AND
+ * open throttle together.  Decide which behaviour you want -- it is a one-line
+ * change in sensorImplausibilityMonitoring() -- and then either wire this in or
+ * delete it. */
 #define OPEN_THROTTLE_PERCENTAGE_THRESHOLD          400
 
 
@@ -180,8 +187,13 @@ extern "C" {
 #define PID_BACKWARD_D  0
 
 /* Nominal control period in ms.  The loop is now driven by TPS frame arrival
- * and uses the measured dt, so this is only the watchdog fallback period used
- * when CAN goes quiet.  Run pmbtune.py rate to find the real TPS interval. */
+ * and uses the measured dt, so PID_DT is no longer the control period -- it is
+ * kept only as the record of what the old fixed period was, and is referenced
+ * by tests/test_pid.c when demonstrating the integral dead zone it caused.
+ *
+ * THROTTLE_CONTROL_TIMEOUT_MS is the watchdog: how long the loop will wait for
+ * a TPS frame before running anyway.  Run `pmbtune.py rate` to find the real
+ * TPS interval and sanity-check it against this. */
 #define PID_DT          1
 #define THROTTLE_CONTROL_TIMEOUT_MS 10
 
@@ -252,10 +264,13 @@ extern "C" {
 #define UPSHIFT_CUT_DURATION                    200
 #define UPSHIFT_SOLENOID_RELEASE_TIME           100
 
-/* Legacy, never referenced by any code path.  Left in place so nobody assumes
- * they were doing something; delete once you have confirmed they are dead. */
+/* UNUSED: not referenced by any code path.  Kept only so nobody assumes they
+ * were doing something; safe to delete once you have confirmed that.
+ * THROTTLE_BLIP_DELAY was 50 while the code it supposedly controlled used a
+ * hardcoded 40 -- DOWNSHIFT_SOLENOID_RELEASE_TIME above is the real value. */
 #define UPSHIFT_SOLENOID_HOLD_TIME              120
 #define THROTTLE_BLIP_DELAY                     50
+#define THROTTLE_UPDATION_DELTA                 2
 
 #define SENSOR_IMPLAUSIBILITY_TIMEOUT           100
 #define SENSOR_BACK_TO_NORMAL_TIMEOUT           50
@@ -403,6 +418,8 @@ extern "C" {
 #define RAW_BS2_TO_BRAKE_PERCENTAGE_SLOPE               SLOPE(1000, 0, BSE2_OPERATION_UB, BSE2_OPERATION_LB)
 #define RAW_BS2_TO_BRAKE_PERCENTAGE_INTERCEPT           INTERCEPT(1000, 0, BSE2_OPERATION_UB, BSE2_OPERATION_LB)
 
+/* UNUSED.  Superseded by THROTTLE_MAP above, which is the pedal-to-throttle
+ * curve the firmware actually uses.  Safe to delete. */
 #define APPS_PEDAL_PERCENT_TO_THROTTLE_2D_PERCENTAGE_SLOPE      SLOPE(69000, 1, 1000, 0)
 #define APPS_PEDAL_PERCENT_TO_THROTTLE_2D_PERCENTAGE_INTERCEPT  INTERCEPT(69000, 1, 1000, 0)
 

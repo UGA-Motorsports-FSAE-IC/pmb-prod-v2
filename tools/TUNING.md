@@ -12,10 +12,128 @@ and prints the line to paste.
 
 ---
 
+# READ FIRST — values you must set yourself
+
+`pmbtune.py` measures properties of the **throttle body and motor**. It cannot
+measure anything about your engine, your sensors' wiring, or your CAN bus —
+those you must set correctly first, in `Core/Inc/constants.h`, or everything
+below produces confident nonsense.
+
+Work down this list before you start.
+
+### 1. Sensor calibration — the one that invalidates everything
+
+```c
+#define TPS1_OPERATION_LB   700     // positive slope sensor
+#define TPS1_OPERATION_UB   3615
+#define TPS2_OPERATION_LB   3140    // opposite slope: LB > UB is correct here
+#define TPS2_OPERATION_UB   225
+#define APPS1_OPERATION_LB  966     // opposite slope sensor
+#define APPS1_OPERATION_UB  1935
+#define APPS2_OPERATION_LB  2120    // positive slope sensor
+#define APPS2_OPERATION_UB  2980
+```
+
+**Every position number in this document is derived from these.** The firmware
+converts raw TPS counts to permille with a straight line fitted between
+`OPERATION_LB` and `OPERATION_UB`. If those endpoints are wrong, then `pv` is
+wrong, `limits` reports the wrong stops, `ident` computes a gain in the wrong
+units, and the derived gains are wrong — with no symptom that points at the
+cause.
+
+**Verify before tuning:** run `pmbtune.py monitor`, move the plate by hand from
+fully closed to fully open, and confirm `pv` sweeps approximately 0 → 1000. If
+it tops out at 600, or goes negative, or runs backwards, fix these constants
+first. Same check for `pedal` against the throttle pedal.
+
+Note `TPS2` and `APPS1` are opposite-slope sensors, so their `LB` is numerically
+larger than their `UB`. That is intentional — the `SLOPE`/`INTERCEPT` macros
+handle it. Don't "fix" it.
+
+### 2. CAN frame layout
+
+```c
+#define TPS1_CAN_ID 215   /* + APPS2, TPS2, BS1 share this frame */
+#define RPM_CAN_ID  1520
+#define COOLANT_CAN_ID 1522
+/* ... and the matching *_CAN_OFFSET for each */
+```
+
+If an ID or offset is wrong you will see a value that never changes, or garbage.
+`monitor` catches this in ten seconds. Note RPM and coolant are **big-endian**
+on this bus while the sensors are little-endian; the accessor macros differ
+accordingly.
+
+### 3. Engine values — set these from your engine, not from this file
+
+These defaults came from the previous firmware. They are **not** measured and
+`pmbtune.py` will not touch them.
+
+| Constant | Default | What it means |
+|---|---|---|
+| `RPM_HOT_IDLE_TARGET` | 2000 | target idle, warm |
+| `RPM_COLD_IDLE_TARGET` | 2000 | target idle, cold — usually should be *higher* than hot |
+| `RPM_TOO_LOW_THRESHOLD` | 1500 | below this, idle switches to the aggressive save gain |
+| `RPM_HOT_IDLE_MAX_THROTTLE` | 200 | ceiling on idle plate opening, permille |
+| `RPM_COLD_IDLE_MAX_THROTTLE` | 200 | same, cold |
+| `IDLE_TEMP_STEPDOWN_THRESHOLD` | 170 | °F at which hot idle values take over |
+| `STARTER_RPM` | 300 | above this the engine is considered running, not cranking |
+| `DOWNSHIFT_MAX_RPM` | 9000 | no blip above this — **set from your rev limit** |
+| `BLIP_RPM_LOW` / `_HIGH` | 4000 / 9000 | rpm range the blip schedule spans |
+| `GAS_PEDAL_IDLE_THRESHOLD` | 100 | below 10% pedal, the idle loop owns the target |
+
+`RPM_COLD_IDLE_TARGET` being equal to the hot target is almost certainly wrong
+for a real engine. Decide it deliberately before §12.
+
+### 4. Motor driver limits
+
+| Where | Constant | Default | Note |
+|---|---|---|---|
+| `constants.h` | `MAX_THROTTLE_MOTOR_PWM` | 1000 | duty ceiling in normal running |
+| CubeMX (`tim.c`) | TIM16 PSC / ARR | 0 / 999 | gives a **48 kHz** carrier |
+
+**The 48 kHz carrier is an open question.** Some brushed H-bridge drivers will
+not switch that fast and will overheat or simply not drive. Confirm against
+your Pololu part's datasheet. If it needs a lower carrier, change the prescaler
+in CubeMX — do **not** hand-edit `tim.c`, it is generated. Nothing in the
+control loop assumes 1000 counts; `board.h` reads full scale from the timer at
+runtime.
+
+### 5. Safety thresholds — review, don't inherit
+
+```c
+#define MAX_THROTTLE_INTENDED_VS_ACTUAL_DEVIATION 200  // 20%
+#define MAX_GAS_PEDAL_SENSORS_DEVIATION           100  // 10%
+#define MAX_THROTTLE_SENSORS_DEVIATION            100
+#define HARD_BRAKING_PERCENTAGE_THRESHOLD         160
+#define THROTTLEBODY_FAILURE_TIMEOUT              200  // ms
+```
+
+Check `MAX_GAS_PEDAL_SENSORS_DEVIATION` against the APPS plausibility
+requirement in the current rulebook for your competition and year. I have not
+verified these values against any specific rules edition — it is a
+scrutineering item, not a tuning preference, so confirm it against the actual
+text rather than trusting the inherited 10%.
+
+Also be aware `THROTTLEBODY_FAILURE_TIMEOUT` (200 ms) interacts with the jam
+guard's `THROTTLE_STALL_TIMEOUT_MS` (150 ms): you get roughly one unjam attempt
+before the safety path takes over. That ordering is intentional. See the note in
+`constants.h`.
+
+### 6. Known wiring discrepancy
+
+The CubeMX labels for **PA6/PA7 are reversed** relative to the harness.
+`board.h` is authoritative (PA6 = downshift, PA7 = upshift) and `main.h`'s
+`upshift_Pin`/`downshift_Pin` are wrong. Verify with a meter before you trust
+either, and fix the `.ioc` labels when you next regenerate.
+
+---
+
 ## Contents
 
 | | Step | Engine | Needs |
 |---|---|---|---|
+| §0 | READ FIRST — values you must set yourself | — | — |
 | §1 | What you need | — | — |
 | §2 | One-time setup | — | — |
 | §3 | Build and flash Debug | — | — |
@@ -53,9 +171,41 @@ and prints the line to paste.
 - `arm-none-eabi-gcc` + `cmake` + `ninja` (you already build with these)
 - Python 3.10 or newer
 
+Works on Linux, macOS and Windows. Everything in `pmbtune.py` is pure Python
+over SWD, so there is no platform-specific code — see §2 for the shell-syntax
+differences and the one Windows driver gotcha.
+
+On Windows, make sure `arm-none-eabi-gcc`, `cmake` and `ninja` are all on
+`PATH` in the shell you build from. If you normally build inside STM32CubeIDE,
+the easiest route is to install the Arm GNU Toolchain plus CMake and Ninja
+standalone, since the CMake presets here are driven from the command line.
+
 ---
 
 ## 2. One-time setup
+
+### Conventions used in this document
+
+Commands are written for Linux/macOS. **Everything in `pmbtune.py` is pure
+Python and works identically on Windows** — only the shell syntax differs:
+
+| This document writes | On Windows (PowerShell) type |
+|---|---|
+| `python3` | `python` (or `py`) |
+| `source .venv/bin/activate` | `.venv\Scripts\Activate.ps1` |
+| a trailing `\` to continue a line | a trailing backtick `` ` ``, or just put it on one line |
+| `cmd a \| tee f.txt` | `cmd a > f.txt` |
+| `bash tests/run.sh` | see "Running the self-checks" below |
+
+Forward slashes in paths work fine in PowerShell, so `--elf
+build/Debug/pmb-prod-v2.elf` needs no change. Everything else — every
+subcommand, every flag — is identical on all three platforms.
+
+Use PowerShell, not `cmd.exe`. The old `cmd` shell has no `tee` and awkward
+quoting; nothing below depends on PowerShell specifically, it is just less
+painful.
+
+### Linux / macOS
 
 ```bash
 cd ~/Projects/FSAE/pmb-prod-v2
@@ -65,32 +215,82 @@ source .venv/bin/activate
 pip install -r tools/requirements.txt
 ```
 
+### Windows (PowerShell)
+
+```powershell
+cd $HOME\Projects\FSAE\pmb-prod-v2
+
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r tools\requirements.txt
+```
+
+If activation is blocked by execution policy, either run
+`Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` for that session,
+or skip the venv entirely and `pip install --user -r tools\requirements.txt`.
+
+Install Python from python.org with **"Add python.exe to PATH"** ticked — the
+Microsoft Store build sandboxes USB access in ways that can stop pyOCD seeing
+the probe.
+
+### Both: tell pyOCD about the target
+
 pyOCD needs a device description for the STM32C0 before it knows the target:
 
-```bash
+```
 pyocd pack find stm32c092
 pyocd pack install stm32c092rctx
 ```
 
 Check the probe is seen:
 
-```bash
+```
 pyocd list
 ```
 
-You should get a line naming your ST-Link. If not, it is a USB permissions
-problem on Linux — see §15.
+You should get a line naming your ST-Link. If not:
 
-Finally, confirm the host-side maths is sound before you trust anything it
-prints:
+- **Linux** — USB permissions, see §15.
+- **Windows** — driver binding. **Do not fight this**: §15 has three fixes, and
+  the first (`--backend gdb`) needs no driver change at all — it routes memory
+  access through an `ST-LINK_gdbserver` that uses ST's own driver. Read §15
+  before installing anything.
 
-```bash
-bash tests/run.sh
-```
+If you end up on the gdb backend, add `--backend gdb` to every `pmbtune.py`
+command in this document. Nothing else changes.
 
-Both suites must say "passed". These are regression tests for real defects
+### Running the self-checks
+
+Confirm the host-side maths is sound before you trust anything it prints. Both
+suites must say "passed" — they are regression tests for real defects
 (including a noise-bias bug that made the identifier report 50%-wrong damping),
 so if they fail, the gains this tool derives are not trustworthy.
+
+```bash
+bash tests/run.sh          # Linux, macOS, Git Bash, WSL
+```
+
+The script skips gracefully rather than failing if a host C compiler or numpy
+is missing, and prints a summary of what actually ran. Check that summary — a
+skip is not a pass.
+
+On Windows you can run the same script from **Git Bash** (ships with Git for
+Windows) or WSL. The C half needs a *host* compiler; `arm-none-eabi-gcc` is a
+cross-compiler and cannot build it. If you do not want to install MSYS2/MinGW
+gcc, run the halves by hand in PowerShell:
+
+```powershell
+# control math (needs any host gcc/clang; skip if you have none)
+gcc -std=c11 -Wall -Wextra -Werror -I Core\Inc `
+    tests\test_pid.c Core\Src\pid.c -o test_pid.exe
+.\test_pid.exe
+
+# tuning math (needs only Python + numpy, so this one always runs)
+python tests\test_pmbtune.py
+```
+
+The second one is the more important of the two for trusting derived gains, and
+it has no compiler dependency at all.
 
 ---
 
@@ -194,6 +394,14 @@ python3 tools/pmbtune.py rate --seconds 10
   rpm  changes every   : 20.0 ms (~50 Hz of real new data)
 ```
 
+**How it works.** Purely passive — it reads the telemetry ring and looks at
+timestamps. The loop period is the difference between consecutive `t_ms`
+values. The "real new data" figure is different and more useful: it diffs the
+timestamps *only across samples where the value actually changed*, which
+separates how often the loop runs from how often the sensor gives it something
+new. A loop running at 500 Hz on data arriving at 50 Hz is processing the same
+number nine times out of ten.
+
 Act on it:
 
 - **`pv` changes every N ms** is your true position sample rate. If it is far
@@ -233,6 +441,17 @@ ENGINE OFF. Creeping to each mechanical stop under a PWM ceiling...
 
 Measured stops 8..994 with a 15 permille margin on each end.
 ```
+
+**How it finds it.** Drives a constant open-loop duty — `--ceiling` counts, no
+PID involved — first toward the closed stop, then toward the open stop. The
+plate runs to each end and stays there. It takes the median of the last 20
+position samples as the resting position, which rejects the sensor noise that a
+single reading would pick up. Then it subtracts `--margin` from each end so the
+usable window sits clear of both stops.
+
+The reason this fixes the jam is that the firmware now clamps every target into
+that window, so no code path — pedal map, idle, blip, closure, or SWD injection
+— can command the plate against a stop for the integral to wind up against.
 
 **Choosing `--ceiling`:** start at 300. If the plate does not reach the open
 stop, the spring is stronger than 300 counts of duty — raise in steps of 100.
@@ -283,6 +502,12 @@ ENGINE OFF. Ramping duty until the plate breaks free...
   #define THROTTLE_DIR_HYSTERESIS 56
 ```
 
+**How it finds it.** Ramps the open-loop duty up from 0 in small steps, holding
+each briefly, and records the first duty at which the position has moved more
+than `--motion` permille away from where it started. Then repeats driving the
+other direction. The ramp is deliberately slow so what it catches is the
+*static* breakaway, not an inertial overshoot from a sudden step.
+
 It reports both directions and recommends the larger. Closing is usually lower
 because the return spring helps.
 
@@ -326,6 +551,21 @@ ENGINE OFF. Holding positions closed-loop and recording hold duty...
   Pass that to ident:   pmbtune.py ... ident --bias 260
 ```
 
+**How it finds it.** Commands a series of hold positions spread across the
+usable travel, closed-loop so the plate actually gets there. At each one it
+waits `--dwell` seconds, then takes the median duty and median position over
+the **last third** of the dwell — the settled part, discarding the transient
+getting there. That gives one (position, duty) pair per point. A least-squares
+straight line through those pairs is the spring curve: slope and offset.
+
+Positions the plate could not hold within `--tolerance` are reported and
+skipped rather than fitted, so a point that ran into a stop cannot bend the
+line.
+
+The firmware then adds `(slope × target)/1000 + offset` to the controller
+output, so the PID starts each move already supplying roughly the right holding
+effort and only has to correct the remainder.
+
 **Read the R².** Above ~0.95 the spring is behaving linearly and the fit is
 good. Below 0.8 either the holds had not settled (raise `--dwell`) or the
 spring is genuinely nonlinear, in which case use the feedforward anyway but
@@ -353,6 +593,45 @@ python3 tools/pmbtune.py --i-understand --ceiling 500 \
     ident --bias 260 --amplitude 180 --period 0.8 --seconds 15 \
           --out plant.json --csv ident-raw.csv
 ```
+
+**How it works.** This is the mathematically substantial step, so it is worth
+understanding what it is doing.
+
+1. **Excite.** It parks the plate mid-travel closed-loop, then switches to open
+   loop and applies a square wave of `±amplitude` counts *around* `--bias`.
+   Open loop matters: a closed-loop test measures the loop you already have, not
+   the plant underneath it.
+
+2. **Fit a discrete model.** A throttle plate is a second-order system — rotor
+   and plate inertia, damping, and a return spring — so it is fitted as
+
+   ```
+   pv[n] = a1·pv[n-1] + a2·pv[n-2] + b1·u[n-1-d] + b2·u[n-2-d]
+   ```
+
+   where `d` is transport delay in whole samples. The coefficients come from a
+   least-squares fit, and `d` from a search over candidate integer delays.
+
+3. **Remove the noise bias.** Plain least squares is *biased* here, because its
+   own regressors (`pv[n-1]`, `pv[n-2]`) carry sensor noise, which correlates
+   with the residual and drags the estimate toward excess damping. This is not
+   hypothetical: at 0.8 permille of TPS noise it reported damping 0.59 against a
+   true 0.40. So the fit is iterated with **instrumental variables** — the
+   noisy regressors are replaced by the previous iterate's simulated output,
+   which is driven by the input alone and therefore uncorrelated with the
+   output noise. Converges in 2–3 passes and recovers 0.40 correctly.
+
+4. **Score honestly.** Candidates are ranked on **free-run simulation** fit:
+   the model is driven by the recorded input only, with no access to the real
+   position, and compared against what actually happened. The conventional
+   one-step-ahead R² is useless as a gate — it sits at 0.9999 for almost any
+   model because `pv[n-1]` does the predicting, and it happily hid the damping
+   error above.
+
+5. **Convert to physical terms.** The discrete poles are the roots of
+   `z² − a1·z − a2`; mapping them back with `s = ln(z)/Ts` gives the continuous
+   pole pair, from which `ωn = |s|` and `ζ = −Re(s)/ωn`. DC gain is
+   `(b1+b2)/(1−a1−a2)`, in permille of travel per PWM count.
 
 **`--bias` is not optional in practice.** It is the holding duty from §8. With
 no bias the mean open-loop effort is zero, the spring parks the plate on the
@@ -421,11 +700,35 @@ Firmware values (stored x1000; Kd is per millisecond, see pid.h):
   #define PID_FORWARD_D   6274
 ```
 
+**How it works.** Two stages.
+
+**Stage 1 — the formulas.** For a second-order process with deadtime, IMC-PID
+(Rivera/Morari) gives the gains in closed form as a function of one design
+parameter λ, the desired closed-loop time constant. With `τ = 1/ωn`:
+
+```
+Kc = 2·ζ·τ / (K · (λ + θ))        Ti = 2·ζ·τ        Td = τ / (2·ζ)
+```
+
+Those convert to the firmware's stored form as `Kp = Kc`, `Ki = Kc/Ti`,
+`Kd = Kc·Td`, each scaled by 1000 (and Kd expressed per millisecond — see
+`pid.h` for why).
+
+**Stage 2 — simulate before believing.** Rather than trust a formula, each
+candidate λ is run through a closed-loop simulation: the identified ARX model
+as the plant, and a **bit-for-bit Python mirror of the firmware's own
+`pid_step()`** as the controller. So the predicted response includes the
+integer truncation, the integral clamp, conditional anti-windup, the deadtime
+and the output limits — not an idealised continuous PID that the firmware does
+not actually implement. Rise time, overshoot and settling time are measured off
+that simulated response.
+
 λ is the single tuning knob — larger is slower and more robust. The tool sweeps
-it and picks the **fastest λ that keeps predicted overshoot within budget**,
-simulating each candidate through a bit-for-bit mirror of the firmware's own
-fixed-point controller, so the prediction includes the integer truncation,
-clamps and deadtime.
+it and picks the **fastest λ that keeps predicted overshoot within budget**.
+
+The mirror is kept honest by `tests/test_pmbtune.py`, which checks it against
+the same cases as the C test suite. If the two ever drift apart, the predictions
+become meaningless, so that test failing is a hard stop.
 
 The budget defaults to 5% because overshoot on a throttle plate means
 travelling toward a mechanical stop. Change it deliberately:
@@ -465,6 +768,14 @@ predicted from the model:
 
 restored previous gains (pass --keep to leave them applied)
 ```
+
+**How it works.** Writes the candidate gains into the live parameter block over
+SWD, then injects a square-wave position setpoint and records the result. It
+locates each setpoint edge moving *toward* `--sp-to` and, on the segment after
+it, measures rise time (10–90% of the commanded span), overshoot (peak beyond
+the target as a percentage of the span) and 2% settling time. It reports the
+median across all captured steps plus the spread, then prints the same three
+metrics as predicted by §9b for direct comparison.
 
 **This is the proof step.** Measured within ~15% of predicted means the model
 describes the real plate and the gains are sound.
@@ -575,7 +886,13 @@ ENGINE RUNNING AT IDLE. Recording the plate opening that holds it.
   #define IDLE_FF_COLD 64   /* re-measure this one cold */
 ```
 
-This reads only — it commands nothing.
+**How it finds it.** Reads only — commands nothing. It takes the median rpm
+over the window, keeps just the samples where rpm sits within `--rpm-band` of
+that median (i.e. the genuinely steady stretches, discarding any hunting), and
+reports the median plate position across those samples. That position is, by
+definition, the opening that holds the idle with no net rpm error — which is
+exactly the feedforward base term. If fewer than a quarter of the samples
+qualify as steady, it refuses rather than averaging a hunting idle.
 
 **Run it twice**: once warm for `IDLE_FF_HOT`, once from cold start for
 `IDLE_FF_COLD`. A cold engine needs more opening. If you only ever measure
@@ -648,8 +965,10 @@ Everything so far is RAM and dies on reset. Make it permanent.
 **1. Dump the final live set:**
 
 ```bash
-python3 tools/pmbtune.py params | tee tuned-params.txt
+python3 tools/pmbtune.py params > tuned-params.txt   # then open the file
 ```
+
+(Plain redirect rather than `tee`, so the same line works in PowerShell.)
 
 **2. Paste into `Core/Inc/constants.h`.** Each live parameter maps to one
 `#define` in the `MEASURE ME` block:
@@ -700,7 +1019,8 @@ will not work against it; use `log` and real pedal inputs.
 
 | Symptom | Cause and fix |
 |---|---|
-| `no debug probe found` | Probe not enumerated. `pyocd list`. On Linux add a udev rule: `SUBSYSTEM=="usb", ATTR{idVendor}=="0483", MODE="0666"` in `/etc/udev/rules.d/99-stlink.rules`, then `sudo udevadm control --reload && sudo udevadm trigger`, and replug. |
+| `no debug probe found` (Linux) | USB permissions. Add `SUBSYSTEM=="usb", ATTR{idVendor}=="0483", MODE="0666"` to `/etc/udev/rules.d/99-stlink.rules`, then `sudo udevadm control --reload && sudo udevadm trigger`, and replug. |
+| `no debug probe found` (Windows) | Driver binding — see the note below this table. |
 | `pmb_tune.magic is 0x...` | Release build flashed, or the ELF does not match the flash. Rebuild Debug, reflash, retry. |
 | `symbol 'pmb_params' missing` | Built without `PMB_TUNING`, i.e. not the Debug preset. |
 | `target sample is N bytes, host expects 16` | `tuning.h` and `pmbtune.py` are out of sync. You changed one without the other. |
@@ -718,6 +1038,89 @@ will not work against it; use `log` and real pedal inputs.
 **Only one program may own the probe.** You cannot run `monitor` in one
 terminal and `verify` in another.
 
+### If pyOCD cannot see the probe on Windows
+
+This is the one Windows-specific hurdle. Understand the cause, then pick one of
+three fixes — **you do not have to change drivers.**
+
+**The cause.** pyOCD talks to the ST-Link through **libusb**, which on Windows
+needs a WinUSB-compatible driver bound to the device. ST's own driver (the one
+STM32CubeProgrammer and CubeIDE use) is not one. So a probe that works
+perfectly in ST's tools can be completely invisible to pyOCD. ST-Link V2-1 and
+V3 units often enumerate as WinUSB already and just work; standalone V2 dongles
+and clones usually do not.
+
+---
+
+#### Option A — `--backend gdb` (no driver change, recommended first try)
+
+`pmbtune.py` can get its memory reads and writes through a **GDB server**
+instead of driving USB itself. The server owns the probe and uses ST's own
+driver, so nothing needs rebinding and CubeProgrammer/CubeIDE keep working.
+
+`ST-LINK_gdbserver` ships with **STM32CubeCLT** and **STM32CubeIDE**. In one
+terminal:
+
+```powershell
+ST-LINK_gdbserver --swd --attach --port-number 61234
+```
+
+Then in another, add `--backend gdb` to every command:
+
+```powershell
+pmb --backend gdb params
+pmb --backend gdb --i-understand --ceiling 300 limits
+```
+
+> **Check the flag spelling with `ST-LINK_gdbserver --help`** — I have not
+> verified these against your CubeCLT version. What matters is that you select
+> **SWD** and **attach without reset or halt**. If the server halts the core on
+> connect, `pmbtune.py` will not un-halt it: by design this tool issues no run
+> control whatsoever, so it can never stop a running engine. You would see
+> `rate` report no samples.
+
+OpenOCD works the same way if you already have it running:
+
+```
+openocd -f interface/stlink.cfg -f target/stm32c0x.cfg
+pmb --backend gdb --gdb-port 3333 params
+```
+
+(OpenOCD's default GDB port is 3333; ST-LINK_gdbserver's is 61234.)
+
+The backend only ever issues `m` (read memory) and `M` (write memory), both of
+which go over the AHB access port and do not require halting the core. Reads
+are chunked to fit the server's advertised packet size automatically.
+
+---
+
+#### Option B — rebind the driver with Zadig
+
+Replace the ST-Link's driver with WinUSB using [Zadig](https://zadig.akeo.ie/):
+*Options → List All Devices*, select the ST-Link interface, choose **WinUSB**,
+Replace Driver. Then `--backend pyocd` works normally.
+
+> **The trade-off:** binding WinUSB generally stops ST's own tools from seeing
+> that probe until you revert the driver in Device Manager. If you flash with
+> STM32CubeProgrammer you will be switching back and forth — or sidestep it
+> entirely by flashing with `pyocd flash` (§3) and leaving the probe on WinUSB
+> permanently.
+
+---
+
+#### Option C — WSL2 with USB passthrough
+
+Attach the probe into WSL2 with `usbipd-win`, then run the whole session inside
+Linux, where the udev rule from the table above applies. Heavier setup, but
+once working it behaves exactly like the Linux instructions in this document.
+
+---
+
+**Which to pick.** Try A first: it is a one-flag change, needs no admin rights,
+and leaves every other tool working. Use B if you want the simpler one-process
+setup and do not mind the driver dance. Use C if you would rather run the Linux
+path end to end.
+
 ---
 
 ## 16. Command reference
@@ -726,8 +1129,12 @@ Global flags come **before** the subcommand:
 
 ```
 --elf PATH            built ELF for symbol lookup (default build/Debug/...)
+--backend pyocd|gdb   how to reach the probe (default pyocd; use gdb on
+                      Windows if pyocd cannot bind the probe -- see §15)
+--gdb-host HOST       --backend gdb only (default 127.0.0.1)
+--gdb-port N          --backend gdb only (default 61234; OpenOCD uses 3333)
 --target-name NAME    pyocd target type (default stm32c092rctx)
---frequency HZ        SWD clock (default 4000000)
+--frequency HZ        SWD clock, pyocd backend only (default 4000000)
 --i-understand        consent to commanding the throttle motor
 --ceiling N           hard PWM cap enforced in firmware (default 400)
 ```
@@ -748,14 +1155,20 @@ Global flags come **before** the subcommand:
 
 ### The short version
 
+The numeric values below are the worked examples from this document — replace
+each with what your own hardware reports at that step.
+
+**Linux / macOS / Git Bash:**
+
 ```bash
 # setup
 source .venv/bin/activate
 cmake --preset Debug && cmake --build --preset Debug
 pyocd flash --target stm32c092rctx build/Debug/pmb-prod-v2.elf
 
-# measure (engine off)
 P="python3 tools/pmbtune.py"
+
+# measure (engine off)
 $P rate --seconds 10
 $P --i-understand --ceiling 300 limits
 $P params --set soft_min=23 --set soft_max=979
@@ -774,3 +1187,40 @@ $P idleff --seconds 15
 
 # then paste everything into constants.h, rebuild, reflash, re-verify
 ```
+
+**Windows (PowerShell):**
+
+```powershell
+# setup
+.venv\Scripts\Activate.ps1
+cmake --preset Debug; cmake --build --preset Debug
+pyocd flash --target stm32c092rctx build/Debug/pmb-prod-v2.elf
+
+function pmb { python tools\pmbtune.py @args }
+
+# If pyocd cannot see the probe (see Section 15), start a gdbserver in another
+# terminal and add --backend gdb to the function instead:
+#   ST-LINK_gdbserver --swd --attach --port-number 61234
+#   function pmb { python tools\pmbtune.py --backend gdb @args }
+
+# measure (engine off)
+pmb rate --seconds 10
+pmb --i-understand --ceiling 300 limits
+pmb params --set soft_min=23 --set soft_max=979
+pmb --i-understand --ceiling 400 stiction
+pmb params --set stiction_pwm=112 --set dir_hysteresis=56
+pmb --i-understand --ceiling 500 ff --points 9 --dwell 2.0
+pmb params --set ff_slope=362 --set ff_offset=78
+
+# derive and prove
+pmb --i-understand --ceiling 500 ident --bias 260 --amplitude 180 --out plant.json
+pmb derive plant.json --out gains.json
+pmb --i-understand --ceiling 700 verify gains.json --model plant.json
+
+# idle (engine running)
+pmb idleff --seconds 15
+```
+
+The `function pmb { ... @args }` line is the PowerShell equivalent of the
+`P="..."` shortcut — define it once and every command in this document works by
+replacing `python3 tools/pmbtune.py` with `pmb`.

@@ -98,7 +98,6 @@ volatile uint8_t throttle_and_brakes_on_implausibility = 0;
 volatile uint8_t throttle_not_at_intended_implausibility = 0;
 volatile uint8_t shutdownrelay = 0;
 volatile uint8_t throttlerelay = 0;
-volatile uint8_t useapps = 1;
 
 /* Downshift blip.
  *
@@ -120,9 +119,6 @@ volatile uint8_t shift_cut_active = 0;   /* upshift ignition cut in progress  */
  * implausibility task, which opens the throttle relay and lets the return
  * spring close the plate. */
 volatile uint8_t throttle_jam_fault = 0;
-
-/* Last applied motor command, signed, positive = opening. Telemetry only. */
-volatile int32_t throttle_pwm_applied = 0;
 
 extern osMessageQueueId_t canqueue;
 
@@ -522,7 +518,7 @@ void paddleshift(void *argument)
             osDelay(duration);
             blip_until_tick = 0;
 
-            osDelay(THROTTLE_BLIP_DELAY);
+            osDelay(DOWNSHIFT_SOLENOID_RELEASE_TIME);
             DOWNSHIFT_SOLENOID_SET(0);
           }
         } else if (shiftdir == SHIFT_DIR_UP) {
@@ -584,7 +580,7 @@ static int32_t throttle_target_select(uint32_t now, uint8_t *faulted)
     t = THROTTLE_MAP(gas_pedal_position);
   }
 
-  return CLAMP((int32_t)t, pmb_params.soft_min, pmb_params.soft_max);
+  return CLAMP(t, pmb_params.soft_min, pmb_params.soft_max);
 }
 
 /**
@@ -594,6 +590,12 @@ static int32_t throttle_target_select(uint32_t now, uint8_t *faulted)
  * the bridge is driving.  The control period *is* the dead-time, so this needs
  * no busy-wait and no timer.  Reversals smaller than dir_hysteresis are
  * refused outright, which is what stops TPS noise chattering the bridge.
+ *
+ * An output of exactly 0 never flips DIR, so coasting does not disturb the
+ * direction state.
+ *
+ * Holds the direction in statics, so it has a single owner by construction:
+ * call it only from the throttle control task.
  *
  * @return the command actually applied, signed, positive = opening.
  */
@@ -627,9 +629,7 @@ static int32_t throttle_apply(int32_t u, int32_t pwm_max)
 
   THROTTLE_PWM_SET(mag);
 
-  const int32_t applied = dir_opening ? mag : -mag;
-  throttle_pwm_applied = applied;
-  return applied;
+  return dir_opening ? mag : -mag;
 }
 
 void throttlePositionControl(void *argument)
@@ -850,6 +850,9 @@ void rpmIdle(void *argument)
    * `pmbtune.py idleff`.  While it is 0 this loop still will not hold an idle;
    * the structure is correct but uncalibrated. */
 
+  /* Two clocks on purpose: `currenttick` is the osDelayUntil schedule anchor
+   * (fixed period, no drift), `last_tick` measures the dt actually elapsed,
+   * which is what the integral needs if this task ever overruns. */
   uint32_t currenttick = osKernelGetTickCount();
   uint32_t last_tick = currenttick;
 

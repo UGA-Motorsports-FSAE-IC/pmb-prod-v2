@@ -63,6 +63,10 @@ int32_t pid_step(const pid_cfg_t *c, pid_state_t *s,
   if (c->d_lpf_shift == 0) {
     s->d_filt = d_target_m;
   } else {
+    /* Integer EMA.  Division rather than >> so the rounding is symmetric about
+     * zero; the cost is that the filter stops converging once the remaining
+     * difference is below 2^shift, which for a derivative term is of no
+     * consequence. */
     uint8_t sh = (c->d_lpf_shift > D_LPF_SHIFT_MAX) ? D_LPF_SHIFT_MAX
                                                     : c->d_lpf_shift;
     s->d_filt += (d_target_m - s->d_filt) / (int32_t)(1u << sh);
@@ -79,7 +83,9 @@ int32_t pid_step(const pid_cfg_t *c, pid_state_t *s,
   /* ---- integral --------------------------------------------------------- */
   const int64_t i_delta = (int64_t)ki * e * dt_ms;   /* micro-output units */
 
-  int64_t i_lim = (int64_t)c->i_max * I_SCALE;
+  /* i_max is writable over SWD during a tuning session, so treat a negative
+   * value as "no integral" rather than letting the two clamps below fight. */
+  int64_t i_lim = (c->i_max > 0) ? (int64_t)c->i_max * I_SCALE : 0;
   if (i_lim > INT32_MAX) i_lim = INT32_MAX;
 
   int64_t i_new = (int64_t)s->i_acc + i_delta;

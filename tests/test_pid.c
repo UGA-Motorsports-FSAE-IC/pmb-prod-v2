@@ -31,10 +31,11 @@ static pid_cfg_t base_cfg(void)
  */
 static void test_no_integral_dead_zone(void)
 {
-  /* First, demonstrate the old bug still arithmetically exists. */
-  assert((1 * 1 * PID_FORWARD_I) / 1000 == 0);   /* e = 1   -> no integration */
-  assert((1 * 28 * PID_FORWARD_I) / 1000 == 0);  /* e = 28  -> no integration */
-  assert((1 * 29 * PID_FORWARD_I) / 1000 == 1);  /* e = 29  -> finally moves  */
+  /* First, demonstrate the old bug still arithmetically exists, at the fixed
+   * 1 ms period (PID_DT) the old loop actually ran at. */
+  assert((PID_DT *  1 * PID_FORWARD_I) / 1000 == 0);  /* e = 1  -> no integration */
+  assert((PID_DT * 28 * PID_FORWARD_I) / 1000 == 0);  /* e = 28 -> no integration */
+  assert((PID_DT * 29 * PID_FORWARD_I) / 1000 == 1);  /* e = 29 -> finally moves  */
 
   pid_cfg_t c = base_cfg();
   c.ki_m = PID_FORWARD_I;   /* 35 */
@@ -77,6 +78,24 @@ static void test_integral_clamp(void)
     assert(u >= c.out_min);
   }
   assert(s.i_acc == 500 * 1000000); /* clamped at i_max, not running away */
+}
+
+/* i_max is writable over SWD, so a mistyped negative value must degrade to
+ * "no integral", not produce something strange. */
+static void test_negative_i_max_disables_integral(void)
+{
+  pid_cfg_t c = base_cfg();
+  c.ki_m  = 1000;
+  c.i_max = -5;
+
+  pid_state_t s;
+  pid_reset(&s);
+
+  for (int i = 0; i < 100; i++) {
+    int32_t u = pid_step(&c, &s, 1000, 0, 1, 0);
+    assert(u >= c.out_min && u <= c.out_max);
+  }
+  assert(s.i_acc == 0);
 }
 
 static void test_antiwindup_holds_integral(void)
@@ -265,6 +284,7 @@ int main(void)
 {
   test_no_integral_dead_zone();
   test_integral_clamp();
+  test_negative_i_max_disables_integral();
   test_antiwindup_holds_integral();
   test_gain_switch_is_bumpless();
   test_no_derivative_kick();

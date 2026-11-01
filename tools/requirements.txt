@@ -1,10 +1,22 @@
 # pmbtune.py
 #
-# pyocd brings pyelftools with it, which is what resolves pmb_params / pmb_log
-# out of the ELF symbol table.  numpy does the least-squares fitting.
-# No scipy, no matplotlib, no OpenOCD.
-pyocd>=0.36
+# Always needed:
+#   pyelftools  resolves pmb_params / pmb_log out of the ELF symbol table, so
+#               addresses can never desynchronise from the flashed firmware
+#   numpy       least-squares fitting for plant identification
+#
+# Needed only for --backend pyocd (the default), which drives USB directly:
+#   pyocd
+#
+# --backend gdb talks to a running ST-LINK_gdbserver or OpenOCD over TCP using
+# nothing but the standard library, so pyocd is optional if you go that route --
+# which is the usual answer on Windows, where pyocd needs a WinUSB-bound driver
+# and ST's own driver is not one. See TUNING.md section 15.
+#
+# No scipy, no matplotlib, no OpenOCD required.
+pyelftools>=0.29
 numpy>=1.24
+pyocd>=0.36
 
 # STM32C0 may need a CMSIS pack before pyocd knows the target:
 #   pyocd pack find stm32c092
