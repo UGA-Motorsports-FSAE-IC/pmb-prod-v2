@@ -59,13 +59,14 @@ extern "C" {
 #define PID_LOW_BACKWARD_P  300
 #define PID_LOW_BACKWARD_I  15
 #define PID_FORWARD_P   1900
-#define PID_BACKWARD_P  600
+#define PID_BACKWARD_P  120
 #define PID_FORWARD_I   35
-#define PID_BACKWARD_I  30
+#define PID_BACKWARD_I  3
 #define PID_FORWARD_D   0
-#define PID_BACKWARD_D  0
+#define PID_BACKWARD_D  10
 #define PID_DT          1  //not divided by 1000. This value is in millisecond units, and represents time between each pid updation.
 
+//BCKWRD PID Medium close - P = 60, D = 10, I = 5
 // the following are constants for can frames
 
 #define APPS1_CAN_ID        210
@@ -94,6 +95,10 @@ extern "C" {
 #define SHIFT_ID            172
 #define SHIFT_DIR_OFFSET    0
 #define SHIFT_COUNT_OFFSET  1
+
+//The following are tx CAN ids
+
+#define THROTTLE_CAN_ID     500
 
 //the following are timing constants
 
@@ -127,7 +132,7 @@ extern "C" {
 
 //the following determines how much blip the downshift should get
 
-#define SHIFT_BLIP_TARGET       800 //80%
+#define SHIFT_BLIP_TARGET       350 //50%
 
 //the following pid tuning values are for the idle rpm contol, all are divided by 1000 in the code, multiply your wanted values by 1000 before inputting them here.
 

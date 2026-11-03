@@ -60,6 +60,7 @@ extern osThreadId_t paddleshiftHandle;
 extern osThreadId_t throttlePositionControlHandle;
 extern osThreadId_t serialMonitoringHandle;
 extern osThreadId_t rpmIdleHandle;
+extern osThreadId_t sendCANHandle;
 
 /* Exported function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -72,6 +73,7 @@ void paddleshift(void *argument);
 void throttlePositionControl(void *argument);
 void serialMonitoring(void *argument);
 void rpmIdle(void *argument);
+void StartsendCAN(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 

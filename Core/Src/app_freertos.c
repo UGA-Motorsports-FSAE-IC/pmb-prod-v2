@@ -59,6 +59,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+extern FDCAN_HandleTypeDef hfdcan1;
 
 volatile uint32_t apps1;
 volatile uint32_t apps2;
@@ -105,7 +106,10 @@ volatile uint8_t useapps = 1;
 volatile uint8_t shiftblipactive = 0;
 volatile int shiftbliptarget;
 
-extern osMessageQueueId_t canqueue;
+extern osMessageQueueId_t rxcanqueue;
+extern osMessageQueueId_t txcanqueue;
+
+txmessage throttlemessages;
 
 /* USER CODE END Variables */
 /* Definitions for sensorImplausibilityMonitoring */
@@ -148,6 +152,13 @@ osThreadId_t rpmIdleHandle;
 const osThreadAttr_t rpmIdle_attributes = {
   .name = "rpmIdle",
   .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 128 * 4
+};
+/* Definitions for sendCAN */
+osThreadId_t sendCANHandle;
+const osThreadAttr_t sendCAN_attributes = {
+  .name = "sendCAN",
+  .priority = (osPriority_t) osPriorityLow,
   .stack_size = 128 * 4
 };
 
@@ -198,6 +209,9 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of rpmIdle */
   rpmIdleHandle = osThreadNew(rpmIdle, NULL, &rpmIdle_attributes);
+
+  /* creation of sendCAN */
+  sendCANHandle = osThreadNew(StartsendCAN, NULL, &sendCAN_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -336,7 +350,7 @@ void readsensordata(void *argument)
 
   for(;;)
   {
-    osMessageQueueGet(canqueue, &currentmessage, NULL, osWaitForever);
+    osMessageQueueGet(rxcanqueue, &currentmessage, NULL, osWaitForever);
 
     currenttick = osKernelGetTickCount();
 
@@ -403,8 +417,10 @@ void readsensordata(void *argument)
     brake_depression_percentage = LINEAR((int)bse1, RAW_BS1_TO_BRAKE_PERCENTAGE_SLOPE, RAW_BS1_TO_BRAKE_PERCENTAGE_INTERCEPT);
     brake_depression_percentage_2nd_sensor = LINEAR((int)bse2, RAW_BS2_TO_BRAKE_PERCENTAGE_SLOPE, RAW_BS2_TO_BRAKE_PERCENTAGE_INTERCEPT);
 
-
-
+    throttlemessages.cantxdata[4] = (uint8_t) actual_throttle_position >> 8;
+    throttlemessages.cantxdata[5] = (uint8_t) actual_throttle_position;
+    throttlemessages.cantxdata[6] = (uint8_t) gas_pedal_position >> 8;
+    throttlemessages.cantxdata[7] = (uint8_t) gas_pedal_position;
   }
   /* USER CODE END readsensors */
 }
@@ -511,6 +527,7 @@ void throttlePositionControl(void *argument)
         integral = 0;
       }
       resetonforward = 1;
+      /*
       if (actual_throttle_position > 200) {
         proportion = error * PID_BACKWARD_P;
         change_in_integral = PID_DT * error * PID_BACKWARD_I;
@@ -518,6 +535,9 @@ void throttlePositionControl(void *argument)
         proportion = error * PID_LOW_BACKWARD_P;
         change_in_integral = PID_DT * error * PID_LOW_BACKWARD_I;
       }
+      */
+      proportion = error * PID_BACKWARD_P;
+      change_in_integral = PID_DT * error * PID_BACKWARD_I;
       derivative = (error - previouserror) * PID_BACKWARD_D / PID_DT;
     }
 
@@ -525,6 +545,12 @@ void throttlePositionControl(void *argument)
     
     integral = (change_in_integral / 1000) + integral;
     int finalresult = ((proportion + derivative) / 1000) + integral;
+
+    throttlemessages.cantxdata[0] = (uint8_t) (finalresult >> 8);
+    throttlemessages.cantxdata[1] = (uint8_t) finalresult;
+    throttlemessages.cantxdata[2] = (uint8_t) (error >> 8);
+    throttlemessages.cantxdata[3] = (uint8_t) error;
+    osMessageQueuePut(txcanqueue, &throttlemessages, 0, 0);
     
     if (finalresult > 0) {
       HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET); //polulu direction forward
@@ -659,6 +685,46 @@ void rpmIdle(void *argument)
 
   }
   /* USER CODE END rpmIdle */
+}
+
+/* USER CODE BEGIN Header_StartsendCAN */
+/**
+* @brief Function implementing the sendCAN thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartsendCAN */
+void StartsendCAN(void *argument)
+{
+  /* USER CODE BEGIN sendCAN */
+  txmessage txmessage;
+
+  FDCAN_TxHeaderTypeDef txheader;
+  txheader.IdType = FDCAN_STANDARD_ID;
+  txheader.TxFrameType = FDCAN_DATA_FRAME;
+  txheader.DataLength = FDCAN_DLC_BYTES_8;
+  txheader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+  txheader.BitRateSwitch = FDCAN_BRS_OFF;
+  txheader.FDFormat = FDCAN_CLASSIC_CAN;
+  txheader.MessageMarker = 0;
+  
+  throttlemessages.id = THROTTLE_CAN_ID;
+
+  /* Infinite loop */
+  for(;;)
+  {
+    osMessageQueueGet(txcanqueue, &txmessage, NULL, osWaitForever);
+    txheader.Identifier = txmessage.id;
+
+    // Wait for FIFO space without hogging the CPU
+    while (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1) == 0) {
+      vTaskDelay(1);
+    }
+    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &txheader, txmessage.cantxdata);
+
+    osDelay(10);
+  }
+  /* USER CODE END sendCAN */
 }
 
 /* Private application code --------------------------------------------------*/

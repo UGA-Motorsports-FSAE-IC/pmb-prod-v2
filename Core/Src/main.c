@@ -40,7 +40,8 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-osMessageQueueId_t canqueue;
+osMessageQueueId_t rxcanqueue;
+osMessageQueueId_t txcanqueue;
 
 
 /* USER CODE END PD */
@@ -74,7 +75,7 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
     rxmessage newmessage;
     HAL_FDCAN_GetRxMessage(&hfdcan1, FDCAN_RX_FIFO0, &newmessage.rxheader, newmessage.canrxdata);
 
-    osMessageQueuePut(canqueue, &newmessage, 0, 0);
+    osMessageQueuePut(rxcanqueue, &newmessage, 0, 0);
   }
 }
 
@@ -114,7 +115,8 @@ int main(void)
   MX_TIM16_Init();
   /* USER CODE BEGIN 2 */
 
-  canqueue = osMessageQueueNew(50, sizeof(rxmessage), NULL);
+  rxcanqueue = osMessageQueueNew(50, sizeof(rxmessage), NULL);
+  txcanqueue = osMessageQueueNew(50, sizeof(txmessage), NULL);
 
   canfilter.IdType = FDCAN_STANDARD_ID;
   canfilter.FilterIndex = 0;
