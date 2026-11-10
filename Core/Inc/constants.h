@@ -127,7 +127,7 @@ extern "C" {
 
 //the following determines how much blip the downshift should get
 
-#define SHIFT_BLIP_TARGET       35 //80%
+#define SHIFT_BLIP_TARGET       350 //35%
 
 //the following pid tuning values are for the idle rpm contol, all are divided by 1000 in the code, multiply your wanted values by 1000 before inputting them here.
 
